@@ -141,6 +141,25 @@ test('drag preview reflects the drop position', async ({ page, goto }) => {
 
   await dragOver(contentBox.left + contentBox.width / 2)
   await expect.poll(mirrorValue).toContain('1\\textcolor{#9ca3af}{+}2')
+  // the SVG overlay renders the full equation (3 glyphs), not just the first
+  await expect
+    .poll(async () =>
+      page.locator('.insertion-preview svg').first().evaluate((el) => {
+        const uses = el.querySelectorAll('use').length
+        const width = parseFloat(el.getAttribute('width') ?? '0')
+        return { uses, width }
+      }),
+    )
+    .toMatchObject({ uses: expect.any(Number) })
+  const overlay = await page
+    .locator('.insertion-preview svg')
+    .first()
+    .evaluate((el) => ({
+      uses: el.querySelectorAll('use').length,
+      width: parseFloat(el.getAttribute('width') ?? '0'),
+    }))
+  expect(overlay.uses).toBeGreaterThanOrEqual(3)
+  expect(overlay.width).toBeGreaterThan(15)
 
   await dragOver(contentBox.left + contentBox.width - 1)
   await expect.poll(mirrorValue).toContain('12\\textcolor{#9ca3af}{+}')

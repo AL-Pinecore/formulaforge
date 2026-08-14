@@ -131,11 +131,11 @@ async function ensureMirrorField(): Promise<MathfieldElement | null> {
   mirror.mathVirtualKeyboardPolicy = 'manual'
   // Offscreen: this field only computes the post-insertion LaTeX, it is never
   // rendered to the user (the preview is drawn as an SVG overlay instead).
+  // It must keep its natural width — a 1px width makes MathLive line-break and
+  // truncate the value to the first element.
   mirror.style.position = 'fixed'
   mirror.style.left = '-10000px'
   mirror.style.top = '0'
-  mirror.style.width = '1px'
-  mirror.style.height = '1px'
   mirror.style.visibility = 'hidden'
   mirror.style.pointerEvents = 'none'
   mirror.style.fontSize = `${props.fontSize}px`

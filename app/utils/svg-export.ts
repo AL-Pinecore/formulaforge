@@ -23,6 +23,7 @@ const SVG_NAMESPACE = 'http://www.w3.org/2000/svg'
 const XLINK_NAMESPACE = 'http://www.w3.org/1999/xlink'
 const XML_DECLARATION = '<?xml version="1.0" encoding="UTF-8" standalone="no"?>'
 const EX_PIXELS = 8
+const EM_PIXELS = 2 * EX_PIXELS
 
 export function sanitizeColor(value: string | null | undefined): string | null {
   if (!value) {
@@ -98,10 +99,13 @@ export async function renderEquationSvg(
   const ex = EX_PIXELS
 
   const node = await MathJax.tex2svgPromise(latex, {
-    display: options.display ?? false,
+    // Always render in display mode: MathJax 4's SVG output line-breaks inline
+    // math (display: false) at every operator regardless of the linebreaks /
+    // containerWidth options, yielding multiple <svg> elements (one per line).
+    // Display mode produces a single <svg> with the whole equation.
+    display: true,
     em: 16,
     ex,
-    containerWidth: 80 * ex,
     scale: 1,
   })
   const adaptor = MathJax.startup.adaptor
@@ -122,10 +126,15 @@ export async function renderEquationSvg(
   }
 
   const viewBox = parseViewBoxEx(svgEl.getAttribute('viewBox'))
-  const widthEx = parseExSize(svgEl.getAttribute('width')) ?? (viewBox?.width ?? 0) / 1000
-  const heightEx = parseExSize(svgEl.getAttribute('height')) ?? (viewBox?.height ?? 0) / 1000
-  const widthPx = widthEx * ex * scale
-  const heightPx = heightEx * ex * scale
+  // In display mode MathJax sets `width="100%"` (no ex unit), so fall back to
+  // the viewBox. The viewBox is in MathJax units (1000 = 1em), so divide by
+  // 1000 to get em and scale by EM_PIXELS (not EX_PIXELS, which is half an em).
+  const widthEx = parseExSize(svgEl.getAttribute('width'))
+  const heightEx = parseExSize(svgEl.getAttribute('height'))
+  const widthPx =
+    widthEx !== null ? widthEx * ex * scale : ((viewBox?.width ?? 0) / 1000) * EM_PIXELS * scale
+  const heightPx =
+    heightEx !== null ? heightEx * ex * scale : ((viewBox?.height ?? 0) / 1000) * EM_PIXELS * scale
   svgEl.setAttribute('width', `${widthPx}`)
   svgEl.setAttribute('height', `${heightPx}`)
 

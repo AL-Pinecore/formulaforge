@@ -4,16 +4,14 @@
 
 [English](./README.en.md) | **中文**
 
-[![CI](https://img.shields.io/github/actions/workflow/status/yourname/formulaforge/build.yml?label=CI&style=flat-square)](https://github.com/yourname/formulaforge/actions/workflows/build.yml)
-[![Version](https://img.shields.io/github/v/release/yourname/formulaforge?style=flat-square)](https://github.com/yourname/formulaforge/releases)
+[![CI](https://img.shields.io/github/actions/workflow/status/AL-Pinecore/formulaforge/build.yml?label=CI&style=flat-square)](https://github.com/AL-Pinecore/formulaforge/actions/workflows/build.yml)
+[![Version](https://img.shields.io/github/v/release/AL-Pinecore/formulaforge?style=flat-square)](https://github.com/AL-Pinecore/formulaforge/releases)
 [![Tauri 2](https://img.shields.io/badge/Tauri-2-67C8A2?style=flat-square)](https://tauri.app/)
 [![Nuxt 4](https://img.shields.io/badge/Nuxt-4-00DC82?style=flat-square)](https://nuxt.com/)
 
 一个拖拽式的 LaTeX 公式编辑器桌面应用。从左侧面板把公式元素拖进输入框，即可实时拼装公式，并导出为 SVG / PNG / JPEG / WebP / PDF。
 
 </div>
-
-<!-- 注意：请将徽章中的 `yourname/formulaforge` 替换为你的 GitHub 用户名/仓库名。 -->
 
 ## 功能
 
