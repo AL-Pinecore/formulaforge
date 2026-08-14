@@ -1,0 +1,26 @@
+# Node
+node_modules
+dist
+.output
+.nuxt
+.cache
+*.log
+
+# Generated vendor assets (recreated by scripts/copy-vendor-assets.mjs)
+public/mathjax
+public/mathjax-newcm-font
+public/mathlive/fonts
+
+# Tauri
+src-tauri/target
+src-tauri/gen/schemas
+
+# Tests
+test-results
+playwright-report
+
+# Env
+.env
+.env.*
+
+.DS_Store

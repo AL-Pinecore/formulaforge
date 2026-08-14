@@ -1,0 +1,47 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "FormulaForge",
+  "version": "0.1.0",
+  "identifier": "com.formulaforge.app",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://localhost:3000",
+    "beforeBuildCommand": "npm run generate",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "FormulaForge",
+        "width": 1360,
+        "height": 860,
+        "minWidth": 920,
+        "minHeight": 600,
+        "resizable": true,
+        "dragDropEnabled": false
+      }
+    ],
+    "security": {
+      "csp": {
+        "default-src": "'self'",
+        "connect-src": "ipc: http://ipc.localhost",
+        "font-src": "'self'",
+        "img-src": "'self' asset: http://asset.localhost data: blob:",
+        "style-src": "'unsafe-inline' 'self'",
+        "script-src": "'self'"
+      },
+      "devCsp": "default-src 'self' http://localhost:3000; connect-src ipc: http://ipc.localhost http://localhost:3000 ws://localhost:3000; font-src 'self' data:; img-src 'self' data: blob:; style-src 'unsafe-inline' 'self'; script-src 'self' 'unsafe-inline' http://localhost:3000"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ]
+  }
+}

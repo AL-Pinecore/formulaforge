@@ -1,0 +1,46 @@
+{
+  "name": "formulaforge",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "nuxt dev",
+    "build": "nuxt build",
+    "generate": "cross-env NUXT_SSR=false nuxt generate",
+    "preview": "nuxt preview",
+    "postinstall": "node scripts/copy-vendor-assets.mjs",
+    "predev": "node scripts/copy-vendor-assets.mjs",
+    "prebuild": "node scripts/copy-vendor-assets.mjs",
+    "pregenerate": "node scripts/copy-vendor-assets.mjs",
+    "typecheck": "nuxt typecheck",
+    "test": "vitest run",
+    "test:unit": "vitest run --project unit",
+    "test:nuxt": "vitest run --project nuxt",
+    "test:rust": "cargo test --manifest-path src-tauri/Cargo.toml",
+    "test:e2e": "playwright test",
+    "check:rust": "cargo fmt --manifest-path src-tauri/Cargo.toml --check && cargo clippy --manifest-path src-tauri/Cargo.toml -- -D warnings",
+    "tauri": "tauri"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2.0.0",
+    "mathjax": "^4.0.0",
+    "mathlive": "^0.110.0",
+    "nuxt": "^4.0.0",
+    "vue": "^3.5.0",
+    "vue-router": "^4.4.0"
+  },
+  "devDependencies": {
+    "@nuxt/test-utils": "^3.0.0",
+    "@playwright/test": "^1.45.0",
+    "@tauri-apps/cli": "^2.0.0",
+    "@types/node": "^26.2.0",
+    "@vue/test-utils": "^2.4.0",
+    "cross-env": "^10.1.0",
+    "happy-dom": "^15.0.0",
+    "typescript": "^5.5.0",
+    "vitest": "^3.2.0",
+    "vue-tsc": "^2.0.0"
+  }
+}
