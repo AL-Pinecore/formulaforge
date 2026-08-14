@@ -94,16 +94,16 @@ public/                 # vendor assets copied by scripts (MathLive fonts, MathJ
 
 ## Scripts
 
-| Command | Description |
-| --- | --- |
-| `npm run dev` | Start the Nuxt dev server |
-| `npm run build` | Build the Nuxt output |
-| `npm run generate` | Static generation (`NUXT_SSR=false`, used by Tauri bundling) |
-| `npm run preview` | Preview the build output |
-| `npm run tauri dev` | Desktop development mode |
-| `npm run tauri build` | Bundle the desktop app |
-| `npm run typecheck` | TypeScript type checking |
-| `npm test` | Run frontend tests |
-| `npm run test:e2e` | Playwright E2E tests |
-| `npm run test:rust` | Rust unit tests |
-| `npm run check:rust` | Rust format check + clippy |
+| Command               | Description                                                  |
+|-----------------------|--------------------------------------------------------------|
+| `npm run dev`         | Start the Nuxt dev server                                    |
+| `npm run build`       | Build the Nuxt output                                        |
+| `npm run generate`    | Static generation (`NUXT_SSR=false`, used by Tauri bundling) |
+| `npm run preview`     | Preview the build output                                     |
+| `npm run tauri dev`   | Desktop development mode                                     |
+| `npm run tauri build` | Bundle the desktop app                                       |
+| `npm run typecheck`   | TypeScript type checking                                     |
+| `npm test`            | Run frontend tests                                           |
+| `npm run test:e2e`    | Playwright E2E tests                                         |
+| `npm run test:rust`   | Rust unit tests                                              |
+| `npm run check:rust`  | Rust format check + clippy                                   |
