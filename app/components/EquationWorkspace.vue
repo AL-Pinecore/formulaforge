@@ -1,10 +1,10 @@
 <script setup lang="ts">
+import { convertLatexToMarkup } from 'mathlive'
 import type { MathfieldElement, LatexSyntaxError } from 'mathlive'
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { getElementById } from '~/data/equation-elements'
 import { DRAG_ELEMENT_MIME, draggedElementId } from '~/utils/drag-payload'
 import { restoreEmptyGroupLatex } from '~/utils/empty-group'
-import { renderEquationSvg, stripXmlDeclaration } from '~/utils/svg-export'
 import type { EquationElement } from '~/types/equation'
 
 const props = defineProps<{ fontSize: number }>()
@@ -29,9 +29,11 @@ let mathfield: MathfieldElement | null = null
 let mirrorField: MathfieldElement | null = null
 let disposed = false
 let previewRaf = 0
-let previewRenderId = 0
 let lastPreviewKey = ''
 let dragOffset = -1
+let dragPlaceholderIndex = -1
+let dragX = -1
+let dragY = -1
 let restoreTimer: ReturnType<typeof setTimeout> | null = null
 
 function getMf(): MathfieldElement | null {
@@ -129,10 +131,8 @@ async function ensureMirrorField(): Promise<MathfieldElement | null> {
   mirror.classList.add('workspace-mirror')
   mirror.readOnly = true
   mirror.mathVirtualKeyboardPolicy = 'manual'
-  // Offscreen: this field only computes the post-insertion LaTeX, it is never
-  // rendered to the user (the preview is drawn as an SVG overlay instead).
-  // It must keep its natural width — a 1px width makes MathLive line-break and
-  // truncate the value to the first element.
+  // Offscreen & hidden: this field only computes the post-insertion LaTeX, it
+  // is never rendered to the user (the preview is drawn as MathLive markup).
   mirror.style.position = 'fixed'
   mirror.style.left = '-10000px'
   mirror.style.top = '0'
@@ -165,7 +165,13 @@ function updateInsertionPreview(event: DragEvent) {
     offset = inside ? mf.lastOffset : -1
   }
   dragOffset = offset
-  const key = `${element.id}|${mf.value}|${dragOffset}`
+  dragPlaceholderIndex = placeholderIndexAtPoint(mf, event.clientX, event.clientY)
+  dragX = event.clientX
+  dragY = event.clientY
+  const key =
+    dragPlaceholderIndex >= 0
+      ? `${element.id}|${mf.value}|placeholder:${dragPlaceholderIndex}`
+      : `${element.id}|${mf.value}|${dragOffset}`
   if (key === lastPreviewKey) {
     return
   }
@@ -180,15 +186,26 @@ function updateInsertionPreview(event: DragEvent) {
   })
 }
 
-async function renderPreview(element: EquationElement) {
+function renderPreview(element: EquationElement) {
   const mf = getMf()
   const mirror = mirrorField
   if (!mf || !mirror) {
     return
   }
-  const id = ++previewRenderId
+  const rect = mf.getBoundingClientRect()
+  // Position the mirror over the field (invisible) so its placeholder boxes
+  // share the field's coordinates for hit-testing.
+  mirror.style.left = `${rect.left}px`
+  mirror.style.top = `${rect.top}px`
+  mirror.style.width = `${rect.width}px`
   mirror.value = mf.value
-  mirror.position = dragOffset >= 0 ? dragOffset : mf.position
+  let positionSet = false
+  if (dragPlaceholderIndex >= 0) {
+    positionSet = selectPlaceholderAtPoint(mirror, dragX, dragY)
+  }
+  if (!positionSet) {
+    mirror.position = dragOffset >= 0 ? dragOffset : mf.position
+  }
   mirror.insert(element.latex, {
     insertionMode: 'replaceSelection',
     selectionMode: 'item',
@@ -200,32 +217,18 @@ async function renderPreview(element: EquationElement) {
     mirror.applyStyle({ color: PREVIEW_GREY }, { range })
   }
   const previewLatex = mirror.value.replace(/\\placeholder(?:\[[^\]]*\])?\{\}/g, '\\square')
-  try {
-    const result = await renderEquationSvg(previewLatex, {
-      display: false,
-      color: '#1a1a1a',
-      padding: 8,
-      scale: 1,
-    })
-    if (id !== previewRenderId || !dragging.value) {
-      return
-    }
-    const rect = mf.getBoundingClientRect()
-    previewBox.value = { left: rect.left, top: rect.top, width: rect.width, height: rect.height }
-    insertionPreview.value = stripXmlDeclaration(result.svg)
-  } catch {
-    if (id === previewRenderId && dragging.value) {
-      insertionPreview.value = null
-      previewBox.value = null
-    }
-  }
+  const markup = convertLatexToMarkup(previewLatex, { letterShapeStyle: 'tex' })
+  previewBox.value = { left: rect.left, top: rect.top, width: rect.width, height: rect.height }
+  insertionPreview.value = markup
 }
 
 function hidePreview() {
   cancelAnimationFrame(previewRaf)
   lastPreviewKey = ''
   dragOffset = -1
-  previewRenderId++
+  dragPlaceholderIndex = -1
+  dragX = -1
+  dragY = -1
   insertionPreview.value = null
   previewBox.value = null
 }
@@ -253,6 +256,9 @@ function onDragLeave(event: DragEvent) {
 function onDrop(event: DragEvent) {
   event.preventDefault()
   const offset = dragOffset
+  const placeholderIndex = dragPlaceholderIndex
+  const x = dragX
+  const y = dragY
   dragging.value = false
   hidePreview()
   const dataTransfer = event.dataTransfer
@@ -290,7 +296,7 @@ function onDrop(event: DragEvent) {
   if (id) {
     const element = getElementById(id)
     if (element) {
-      void insertElement(element, offset)
+      void insertElement(element, offset, placeholderIndex, x, y)
       return
     }
   }
@@ -300,14 +306,26 @@ function onDrop(event: DragEvent) {
   }
 }
 
-async function insertElement(element: EquationElement, targetOffset?: number) {
+async function insertElement(
+  element: EquationElement,
+  targetOffset?: number,
+  placeholderIndex = -1,
+  x?: number,
+  y?: number,
+) {
   const mf = await ensureMathfield()
   if (!mf) {
     emit('toast', 'The equation editor is not ready yet.', 'error')
     return
   }
-  if (targetOffset != null && Number.isInteger(targetOffset) && targetOffset >= 0) {
-    mf.position = targetOffset
+  let positioned = false
+  if (placeholderIndex >= 0 && typeof x === 'number' && typeof y === 'number') {
+    positioned = selectPlaceholderAtPoint(mf, x, y)
+  }
+  if (!positioned) {
+    if (targetOffset != null && Number.isInteger(targetOffset) && targetOffset >= 0) {
+      mf.position = targetOffset
+    }
   }
   mf.insert(element.latex, {
     selectionMode: 'placeholder',
@@ -364,11 +382,45 @@ function restoreEmptyGroups(mf: MathfieldElement) {
 // settled (rAF) and without any focus() call, both of which otherwise leave the
 // keyboard input state broken.
 function placeholderAtPoint(mf: MathfieldElement, x: number, y: number): boolean {
+  return placeholderIndexAtPoint(mf, x, y) >= 0
+}
+
+function placeholderIndexAtPoint(mf: MathfieldElement, x: number, y: number): number {
+  const root = mf.shadowRoot
+  if (!root) {
+    return -1
+  }
+  let index = 0
+  for (const node of root.querySelectorAll('*')) {
+    if (node.textContent?.trim() !== PLACEHOLDER_GLYPH) {
+      continue
+    }
+    const rect = node.getBoundingClientRect()
+    if (rect.width > 0 && rect.height > 0) {
+      if (
+        x >= rect.left - PLACEHOLDER_CLICK_PAD &&
+        x <= rect.right + PLACEHOLDER_CLICK_PAD &&
+        y >= rect.top - PLACEHOLDER_CLICK_PAD &&
+        y <= rect.bottom + PLACEHOLDER_CLICK_PAD
+      ) {
+        return index
+      }
+      index++
+    }
+  }
+  return -1
+}
+
+// Select the placeholder (in model order) whose rendered box contains the
+// given point. MathLive's moveToNextPlaceholder walks placeholders in model
+// order, so this handles structures where the visual order differs from the
+// model order (e.g. \sum's sub/superscript).
+function selectedPlaceholderAtPoint(mf: MathfieldElement, x: number, y: number): boolean {
   const root = mf.shadowRoot
   if (!root) {
     return false
   }
-  for (const node of root.querySelectorAll('*')) {
+  for (const node of root.querySelectorAll('.ML__selected')) {
     if (node.textContent?.trim() !== PLACEHOLDER_GLYPH) {
       continue
     }
@@ -381,6 +433,23 @@ function placeholderAtPoint(mf: MathfieldElement, x: number, y: number): boolean
       y >= rect.top - PLACEHOLDER_CLICK_PAD &&
       y <= rect.bottom + PLACEHOLDER_CLICK_PAD
     ) {
+      return true
+    }
+  }
+  return false
+}
+
+function selectPlaceholderAtPoint(mf: MathfieldElement, x: number, y: number): boolean {
+  mf.position = 0
+  let prevStart = -1
+  for (let i = 0; i < 64; i++) {
+    mf.executeCommand('moveToNextPlaceholder')
+    const start = mf.selection?.ranges?.[0]?.[0]
+    if (typeof start !== 'number' || start === prevStart) {
+      return false
+    }
+    prevStart = start
+    if (selectedPlaceholderAtPoint(mf, x, y)) {
       return true
     }
   }
@@ -533,6 +602,7 @@ defineExpose({
         top: `${previewBox?.top ?? 0}px`,
         width: `${previewBox?.width ?? 0}px`,
         minHeight: `${previewBox?.height ?? 0}px`,
+        fontSize: `${fontSize}px`,
       }"
       aria-hidden="true"
       v-html="insertionPreview"
@@ -596,11 +666,7 @@ defineExpose({
   background: var(--paper-bg);
   border-radius: 8px;
   overflow: hidden;
-}
-
-.insertion-preview :deep(svg) {
-  max-width: 100%;
-  height: auto;
+  line-height: 1;
 }
 
 .workspace-drop-hint {

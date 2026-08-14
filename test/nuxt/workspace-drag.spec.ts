@@ -3,14 +3,8 @@ import { mount } from '@vue/test-utils'
 import EquationWorkspace from '~/components/EquationWorkspace.vue'
 import { DRAG_ELEMENT_MIME, draggedElementId } from '~/utils/drag-payload'
 
-vi.mock('~/utils/svg-export', () => ({
-  renderEquationSvg: vi.fn(async () => ({
-    svg: '<svg id="preview"></svg>',
-    width: 10,
-    height: 10,
-    hasErrors: false,
-  })),
-  stripXmlDeclaration: (svg: string) => svg,
+vi.mock('mathlive', () => ({
+  convertLatexToMarkup: vi.fn(() => '<span class="ML__latex">preview</span>'),
 }))
 
 class FakeMathField extends HTMLElement {
@@ -108,7 +102,7 @@ describe('EquationWorkspace drag and drop', () => {
 
     const preview = wrapper.find('.insertion-preview')
     expect(preview.exists()).toBe(true)
-    expect(preview.html()).toContain('<svg')
+    expect(preview.html()).toContain('ML__latex')
 
     // the inserted element is greyed via applyStyle on the offscreen mirror
     const mirror = document.querySelector('math-field') as unknown as FakeMathField

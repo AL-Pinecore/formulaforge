@@ -141,25 +141,11 @@ test('drag preview reflects the drop position', async ({ page, goto }) => {
 
   await dragOver(contentBox.left + contentBox.width / 2)
   await expect.poll(mirrorValue).toContain('1\\textcolor{#9ca3af}{+}2')
-  // the SVG overlay renders the full equation (3 glyphs), not just the first
-  await expect
-    .poll(async () =>
-      page.locator('.insertion-preview svg').first().evaluate((el) => {
-        const uses = el.querySelectorAll('use').length
-        const width = parseFloat(el.getAttribute('width') ?? '0')
-        return { uses, width }
-      }),
-    )
-    .toMatchObject({ uses: expect.any(Number) })
-  const overlay = await page
-    .locator('.insertion-preview svg')
-    .first()
-    .evaluate((el) => ({
-      uses: el.querySelectorAll('use').length,
-      width: parseFloat(el.getAttribute('width') ?? '0'),
-    }))
-  expect(overlay.uses).toBeGreaterThanOrEqual(3)
-  expect(overlay.width).toBeGreaterThan(15)
+  // the markup overlay renders the full equation with the grey + (not just the first glyph)
+  const overlay = page.locator('.insertion-preview')
+  await expect(overlay).toContainText('1')
+  await expect(overlay).toContainText('2')
+  await expect(overlay.locator('span[style*="#9ca3af"]')).toHaveCount(1)
 
   await dragOver(contentBox.left + contentBox.width - 1)
   await expect.poll(mirrorValue).toContain('12\\textcolor{#9ca3af}{+}')
@@ -220,6 +206,72 @@ test('dragging onto a placeholder replaces it in the preview and reverts on leav
     [phBox!.x + phBox!.width + 40, phBox!.y + phBox!.height / 2],
   )
   await expect.poll(mirrorValue).toContain('\\placeholder')
+
+  await page.evaluate(() => {
+    document
+      .querySelector('button[aria-label="Insert Plus"]')!
+      .dispatchEvent(new DragEvent('dragend', { bubbles: true, cancelable: true, dataTransfer: new DataTransfer() }))
+  })
+})
+
+test('dropping onto the sum subscript replaces it', async ({ page, goto }) => {
+  await goto('/', { waitUntil: 'hydration' })
+  await page.getByRole('button', { name: 'Insert Sum' }).click()
+  const textarea = page.locator('.latex-textarea')
+  await expect(textarea).toHaveValue(/\\sum/, { timeout: 10000 })
+  await page.waitForTimeout(100)
+
+  const rects = await page.locator('math-field').evaluate((el) => {
+    const root = (el as HTMLElement & { shadowRoot: ShadowRoot }).shadowRoot
+    const out: { left: number; top: number; width: number; height: number }[] = []
+    for (const n of root.querySelectorAll('*')) {
+      if (n.textContent?.trim() !== '▢') continue
+      const r = n.getBoundingClientRect()
+      if (r.width > 0 && r.height > 0) out.push({ left: r.left, top: r.top, width: r.width, height: r.height })
+    }
+    return out
+  })
+  expect(rects.length).toBeGreaterThanOrEqual(2)
+  // the subscript placeholder is the lowest one on screen
+  const sub = rects.reduce((a, b) => (a.top > b.top ? a : b))
+
+  await page.evaluate(() => {
+    document
+      .querySelector('button[aria-label="Insert Plus"]')!
+      .dispatchEvent(new DragEvent('dragstart', { bubbles: true, cancelable: true, dataTransfer: new DataTransfer() }))
+  })
+  const dropAt = (cx: number, cy: number) =>
+    page.evaluate(
+      ([x, y]) => {
+        document
+          .querySelector('.workspace')!
+          .dispatchEvent(
+            new DragEvent('dragover', { bubbles: true, cancelable: true, clientX: x, clientY: y, dataTransfer: new DataTransfer() }),
+          )
+      },
+      [cx, cy],
+    )
+
+  await dropAt(sub.left + sub.width / 2, sub.top + sub.height / 2)
+  const mirrorValue = () =>
+    page.evaluate(() => (document.querySelector('math-field.workspace-mirror') as unknown as { value: string })?.value)
+  await expect.poll(mirrorValue).toContain('\\sum_{\\textcolor{#9ca3af}{+}}')
+
+  await page.evaluate(
+    ([x, y]) => {
+      const dt = new DataTransfer()
+      dt.setData('application/x-equation-element', 'plus')
+      document
+        .querySelector('.workspace')!
+        .dispatchEvent(
+          new DragEvent('drop', { bubbles: true, cancelable: true, clientX: x, clientY: y, dataTransfer: dt }),
+        )
+    },
+    [sub.left + sub.width / 2, sub.top + sub.height / 2],
+  )
+  await expect
+    .poll(async () => textarea.inputValue())
+    .toContain('\\sum_{+}')
 
   await page.evaluate(() => {
     document
