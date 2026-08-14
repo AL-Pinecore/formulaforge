@@ -187,6 +187,7 @@ function onDragEnd() {
   border-radius: 8px;
   background: transparent;
   cursor: grab;
+  overflow: hidden;
 }
 
 .palette-item:hover {

@@ -6,7 +6,12 @@ import type { ExportFormat, ExportSettings } from '~/types/export'
 import { buildExportPayload, effectiveExportSettings, EXPORT_FORMAT_ORDER } from '~/utils/export-payload'
 
 export function isTauriRuntime(): boolean {
-  return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
+  if (typeof window === 'undefined') {
+    return false
+  }
+  // Tauri 2 sets both `window.isTauri` (a boolean flag) and
+  // `window.__TAURI_INTERNALS__` (the IPC bridge).
+  return (window as { isTauri?: boolean }).isTauri === true || '__TAURI_INTERNALS__' in window
 }
 
 function downloadBlob(contents: string, mime: string, filename: string) {

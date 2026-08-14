@@ -5,6 +5,7 @@ import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { getElementById } from '~/data/equation-elements'
 import { DRAG_ELEMENT_MIME, draggedElementId } from '~/utils/drag-payload'
 import { restoreEmptyGroupLatex } from '~/utils/empty-group'
+import { removeElementAtPlaceholder } from '~/utils/remove-empty-element'
 import type { EquationElement } from '~/types/equation'
 
 const props = defineProps<{ fontSize: number }>()
@@ -35,6 +36,70 @@ let dragPlaceholderIndex = -1
 let dragX = -1
 let dragY = -1
 let restoreTimer: ReturnType<typeof setTimeout> | null = null
+
+// MathLive's getOffsetFromPoint is unreliable with sub/superscripts and groups:
+// it returns 0 (the start of the formula) for many positions, which makes the
+// drag preview jump to the beginning. Instead, derive the caret offset from the
+// per-atom bounding boxes reported by getElementInfo, which are accurate.
+interface OffsetEdge {
+  x: number
+  offset: number
+  depth: number
+}
+
+let offsetEdgesKey = ''
+let offsetEdges: OffsetEdge[] = []
+
+function buildOffsetEdges(mf: MathfieldElement, left: number, right: number): OffsetEdge[] {
+  const key = `${mf.value}|${Math.round(right - left)}`
+  if (key === offsetEdgesKey) {
+    return offsetEdges
+  }
+  const edges: OffsetEdge[] = [
+    { x: left, offset: 0, depth: 0 },
+    { x: right, offset: mf.lastOffset, depth: 0 },
+  ]
+  for (let offset = 1; offset < mf.lastOffset; offset++) {
+    const info = mf.getElementInfo(offset)
+    const bounds = info?.bounds
+    if (!bounds || bounds.width < 0.5) {
+      continue
+    }
+    const depth = info?.depth ?? 0
+    edges.push({ x: bounds.left, offset: offset - 1, depth })
+    edges.push({ x: bounds.right, offset, depth })
+  }
+  edges.sort((a, b) => a.x - b.x)
+  offsetEdgesKey = key
+  offsetEdges = edges
+  return edges
+}
+
+function offsetFromPoint(mf: MathfieldElement, x: number, y: number): number {
+  const root = mf.shadowRoot
+  const latex = root?.querySelector('.ML__latex') as HTMLElement | null
+  if (!root || !latex) {
+    return -1
+  }
+  const rect = latex.getBoundingClientRect()
+  if (x < rect.left - 4 || x > rect.right + 4 || y < rect.top - 8 || y > rect.bottom + 8) {
+    return -1
+  }
+  if (mf.lastOffset <= 0) {
+    return 0
+  }
+  const edges = buildOffsetEdges(mf, rect.left, rect.right)
+  let best = edges[0]!
+  let bestDistance = Infinity
+  for (const edge of edges) {
+    const distance = Math.abs(edge.x - x)
+    if (distance < bestDistance || (distance === bestDistance && edge.depth > best.depth)) {
+      bestDistance = distance
+      best = edge
+    }
+  }
+  return Math.max(0, Math.min(mf.lastOffset, best.offset))
+}
 
 function getMf(): MathfieldElement | null {
   return mathfield
@@ -151,7 +216,7 @@ function updateInsertionPreview(event: DragEvent) {
     hidePreview()
     return
   }
-  let offset = mf.getOffsetFromPoint(event.clientX, event.clientY)
+  let offset = offsetFromPoint(mf, event.clientX, event.clientY)
   if (!Number.isInteger(offset) || offset < 0) {
     // The cursor is over the field's empty area; clamp to the end of the
     // content instead of falling back to the caret (which would make the
@@ -350,6 +415,8 @@ async function insertLatex(text: string, targetOffset?: number) {
   })
 }
 
+const RESTORE_PLACEHOLDER_DELAY = 30
+
 function scheduleRestorePlaceholders(mf: MathfieldElement) {
   if (restoreTimer) {
     clearTimeout(restoreTimer)
@@ -357,7 +424,7 @@ function scheduleRestorePlaceholders(mf: MathfieldElement) {
   restoreTimer = setTimeout(() => {
     restoreTimer = null
     restoreEmptyGroups(mf)
-  }, 200)
+  }, RESTORE_PLACEHOLDER_DELAY)
 }
 
 function restoreEmptyGroups(mf: MathfieldElement) {
@@ -372,6 +439,43 @@ function restoreEmptyGroups(mf: MathfieldElement) {
   publishState(mf)
   mf.position = 0
   mf.executeCommand('moveToNextPlaceholder')
+}
+
+function stringOffsetToModel(mf: MathfieldElement, stringOffset: number): number {
+  let lo = 0
+  let hi = mf.lastOffset
+  while (lo < hi) {
+    const mid = Math.ceil((lo + hi) / 2)
+    if (mf.getValue(0, mid).length <= stringOffset) {
+      lo = mid
+    } else {
+      hi = mid - 1
+    }
+  }
+  return lo
+}
+
+// When the caret sits inside a placeholder that is the sole content of its
+// slot, Backspace/Delete removes the whole enclosing element (promoting any
+// real content from sibling slots) instead of just deleting the placeholder.
+function onMfKeydown(event: KeyboardEvent) {
+  if (event.key !== 'Backspace' && event.key !== 'Delete') {
+    return
+  }
+  const mf = getMf()
+  if (!mf || !mf.hasFocus() || !mf.selectionIsCollapsed) {
+    return
+  }
+  const caretString = mf.getValue(0, mf.position).length
+  const result = removeElementAtPlaceholder(mf.value, caretString)
+  if (!result) {
+    return
+  }
+  event.preventDefault()
+  event.stopPropagation()
+  mf.setValue(result.latex, { silenceNotifications: true })
+  mf.position = stringOffsetToModel(mf, result.caretOffset)
+  publishState(mf)
 }
 
 // Workaround for MathLive bug arnog/mathlive#2806/#2926: clicking a placeholder
@@ -591,6 +695,7 @@ defineExpose({
         class="workspace-field"
         :style="{ fontSize: `${fontSize}px` }"
         @input="onMfInput($event.target as unknown as MathfieldElement)"
+        @keydown.capture="onMfKeydown"
         @undo-state-change="onUndoStateChange($event.target as unknown as MathfieldElement)"
       ></math-field>
     </div>

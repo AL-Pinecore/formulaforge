@@ -299,6 +299,56 @@ test('deleting a group content restores a focused placeholder', async ({ page, g
   await expect(textarea).toHaveValue(/\\sqrt\{z\}/, { timeout: 10000 })
 })
 
+test('backspace removes an element when only its placeholder remains', async ({ page, goto }) => {
+  await goto('/', { waitUntil: 'hydration' })
+  await page.getByRole('button', { name: 'Insert Square root' }).click()
+  const textarea = page.locator('.latex-textarea')
+  await expect(textarea).toHaveValue(/\\sqrt/, { timeout: 10000 })
+  await page.waitForTimeout(50)
+  await page.keyboard.press('Backspace')
+  await expect(textarea).toHaveValue('', { timeout: 10000 })
+})
+
+test('drag preview keeps the insertion point near the target atom', async ({ page, goto }) => {
+  await goto('/', { waitUntil: 'hydration' })
+  const textarea = page.locator('.latex-textarea')
+  await textarea.fill('(x_1+x_2+x_3)')
+  await textarea.blur()
+  await expect(textarea).toHaveValue('(x_1+x_2+x_3)')
+  await page.waitForTimeout(150)
+
+  const contentBox = await page.locator('.workspace-field').evaluate((el) => {
+    const root = (el as HTMLElement & { shadowRoot: ShadowRoot }).shadowRoot
+    const r = root!.querySelector('.ML__base')!.getBoundingClientRect()
+    return { left: r.left, top: r.top, width: r.width, height: r.height }
+  })
+  const y = contentBox.top + contentBox.height / 2
+  const mirrorValue = () =>
+    page.evaluate(() => (document.querySelector('math-field.workspace-mirror') as unknown as { value: string })?.value)
+
+  await page.evaluate(() => {
+    document
+      .querySelector('button[aria-label="Insert Plus"]')!
+      .dispatchEvent(new DragEvent('dragstart', { bubbles: true, cancelable: true, dataTransfer: new DataTransfer() }))
+  })
+
+  await page.evaluate(
+    ([cx, cy]) => {
+      document
+        .querySelector('.workspace')!
+        .dispatchEvent(
+          new DragEvent('dragover', { bubbles: true, cancelable: true, clientX: cx, clientY: cy, dataTransfer: new DataTransfer() }),
+        )
+    },
+    [contentBox.left + contentBox.width * 0.85, y],
+  )
+
+  await expect.poll(mirrorValue).toContain('x_2')
+  const value = await mirrorValue()
+  // The inserted element must not be placed at the very start of the formula.
+  expect(value.indexOf('\\textcolor{#9ca3af}{+}')).toBeGreaterThan(1)
+})
+
 test('clear resets the editor, source, preview and export', async ({ page, goto }) => {
   await goto('/', { waitUntil: 'hydration' })
   await page.getByRole('button', { name: 'Insert Fraction' }).click()

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import { DEFAULT_EXPORT_SETTINGS } from '~/types/export'
 import type { ExportFormat, ExportSettings } from '~/types/export'
 import { isTauriRuntime, useEquationExport } from '~/composables/useEquationExport'
@@ -8,18 +8,23 @@ const props = defineProps<{ latex: string }>()
 
 const emit = defineEmits<{ toast: [message: string, kind: 'success' | 'error'] }>()
 
-const tauri = isTauriRuntime()
-
-const settings = reactive<ExportSettings>({
-  ...DEFAULT_EXPORT_SETTINGS,
-  format: tauri ? DEFAULT_EXPORT_SETTINGS.format : 'svg',
-})
+// Detected on the client only: during SSR `window` is undefined and the
+// desktop/browser defaults must not diverge between server and client.
+const tauri = ref(false)
+const settings = reactive<ExportSettings>({ ...DEFAULT_EXPORT_SETTINGS })
 const { exporting, lastError, exportEquation, formats, formatLabels } = useEquationExport()
 const previewError = ref(false)
 const previewHasErrors = ref(false)
 
+onMounted(() => {
+  tauri.value = isTauriRuntime()
+  if (!tauri.value) {
+    settings.format = 'svg'
+  }
+})
+
 function supportsFormat(format: ExportFormat): boolean {
-  return tauri || format === 'svg'
+  return tauri.value || format === 'svg'
 }
 
 function selectFormat(format: ExportFormat) {
