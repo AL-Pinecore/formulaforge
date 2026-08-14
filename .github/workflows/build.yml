@@ -16,8 +16,11 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
+
+      - name: Use npm 11 (fixes oxc-parser optional-deps lock handling)
+        run: npm install -g npm@11
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable

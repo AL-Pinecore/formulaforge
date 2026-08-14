@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
   },
   "scripts": {
     "dev": "nuxt dev",
@@ -43,5 +43,8 @@
     "typescript": "^5.5.0",
     "vitest": "^3.2.0",
     "vue-tsc": "^2.0.0"
+  },
+  "allowScripts": {
+    "esbuild@0.28.2": true
   }
 }
