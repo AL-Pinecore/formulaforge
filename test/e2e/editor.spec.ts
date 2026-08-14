@@ -309,6 +309,26 @@ test('backspace removes an element when only its placeholder remains', async ({ 
   await expect(textarea).toHaveValue('', { timeout: 10000 })
 })
 
+test('backspace removes a sum when only its placeholders remain', async ({ page, goto }) => {
+  await goto('/', { waitUntil: 'hydration' })
+  await page.getByRole('button', { name: 'Insert Sum' }).click()
+  const textarea = page.locator('.latex-textarea')
+  await expect(textarea).toHaveValue(/\\sum/, { timeout: 10000 })
+  await page.waitForTimeout(50)
+  await page.keyboard.press('Backspace')
+  await expect(textarea).toHaveValue('', { timeout: 10000 })
+})
+
+test('backspace removes an integral when only its placeholders remain', async ({ page, goto }) => {
+  await goto('/', { waitUntil: 'hydration' })
+  await page.getByRole('button', { name: 'Insert Integral' }).click()
+  const textarea = page.locator('.latex-textarea')
+  await expect(textarea).toHaveValue(/\\int/, { timeout: 10000 })
+  await page.waitForTimeout(50)
+  await page.keyboard.press('Backspace')
+  await expect(textarea).toHaveValue('', { timeout: 10000 })
+})
+
 test('drag preview keeps the insertion point near the target atom', async ({ page, goto }) => {
   await goto('/', { waitUntil: 'hydration' })
   const textarea = page.locator('.latex-textarea')

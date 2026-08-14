@@ -455,6 +455,31 @@ function stringOffsetToModel(mf: MathfieldElement, stringOffset: number): number
   return lo
 }
 
+// Map the caret (model offset) to a string offset in mf.value. getValue(0,
+// position) is not a reliable prefix when the caret sits inside a placeholder
+// or operator branch, so instead count placeholder atoms before the caret and
+// locate the matching `\placeholder{}` token in the serialized value.
+function placeholderCaretOffset(mf: MathfieldElement): number {
+  let index = 0
+  for (let offset = 0; offset < mf.position; offset++) {
+    const info = mf.getElementInfo(offset)
+    if (info?.latex != null && /^\\placeholder(?:\[[^\]]*\])?\{\}$/.test(info.latex)) {
+      index++
+    }
+  }
+  const re = /\\placeholder(?:\[[^\]]*\])?\{\}/g
+  let match
+  let i = 0
+  while ((match = re.exec(mf.value))) {
+    if (i === index) {
+      const openBrace = match[0].lastIndexOf('{')
+      return match.index + openBrace + 1
+    }
+    i++
+  }
+  return -1
+}
+
 // When the caret sits inside a placeholder that is the sole content of its
 // slot, Backspace/Delete removes the whole enclosing element (promoting any
 // real content from sibling slots) instead of just deleting the placeholder.
@@ -463,10 +488,19 @@ function onMfKeydown(event: KeyboardEvent) {
     return
   }
   const mf = getMf()
-  if (!mf || !mf.hasFocus() || !mf.selectionIsCollapsed) {
+  if (!mf || !mf.hasFocus()) {
     return
   }
-  const caretString = mf.getValue(0, mf.position).length
+  const info = mf.getElementInfo(mf.position)
+  const isPlaceholder =
+    info?.latex != null && /^\\placeholder(?:\[[^\]]*\])?\{\}$/.test(info.latex)
+  if (!isPlaceholder) {
+    return
+  }
+  const caretString = placeholderCaretOffset(mf)
+  if (caretString < 0) {
+    return
+  }
   const result = removeElementAtPlaceholder(mf.value, caretString)
   if (!result) {
     return
