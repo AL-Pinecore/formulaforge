@@ -128,6 +128,8 @@ math-field {
   --selection-background-color: var(--accent-soft);
   --text-font-family: 'Times New Roman', 'STIX Two Math', serif;
   --smart-fence-color: var(--accent);
+  border: none;
+  outline: none;
 }
 
 math-field::part(virtual-keyboard-toggle) {

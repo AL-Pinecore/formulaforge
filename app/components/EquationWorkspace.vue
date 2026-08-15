@@ -1,5 +1,4 @@
 <script setup lang="ts">
-import { convertLatexToMarkup } from 'mathlive'
 import type { MathfieldElement, LatexSyntaxError } from 'mathlive'
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { getElementById } from '~/data/equation-elements'
@@ -30,6 +29,8 @@ let mathfield: MathfieldElement | null = null
 let mirrorField: MathfieldElement | null = null
 let disposed = false
 let previewRaf = 0
+let snapshotRaf = 0
+let snapshotTimer: ReturnType<typeof setTimeout> | null = null
 let lastPreviewKey = ''
 let dragOffset = -1
 let dragPlaceholderIndex = -1
@@ -196,13 +197,20 @@ async function ensureMirrorField(): Promise<MathfieldElement | null> {
   mirror.classList.add('workspace-mirror')
   mirror.readOnly = true
   mirror.mathVirtualKeyboardPolicy = 'manual'
-  // Offscreen & hidden: this field only computes the post-insertion LaTeX, it
-  // is never rendered to the user (the preview is drawn as MathLive markup).
+  // Offscreen & hidden: this field computes the post-insertion LaTeX and is
+  // briefly shown over the real field as the insertion preview. It must match
+  // the field's box model (transparent background, text color, no selection
+  // highlight) so the preview is pixel-identical to the final result.
   mirror.style.position = 'fixed'
   mirror.style.left = '-10000px'
   mirror.style.top = '0'
   mirror.style.visibility = 'hidden'
   mirror.style.pointerEvents = 'none'
+  mirror.style.background = 'transparent'
+  mirror.style.color = 'var(--text)'
+  mirror.style.zIndex = '50'
+  mirror.style.setProperty('--selection-background-color', 'transparent')
+  mirror.style.setProperty('--contains-highlight-background-color', 'transparent')
   mirror.style.fontSize = `${props.fontSize}px`
   document.body.appendChild(mirror)
   mirrorField = mirror
@@ -258,11 +266,14 @@ function renderPreview(element: EquationElement) {
     return
   }
   const rect = mf.getBoundingClientRect()
-  // Position the mirror over the field (invisible) so its placeholder boxes
-  // share the field's coordinates for hit-testing.
+  // Position the mirror exactly over the field so the preview shares the
+  // field's box (and its placeholder boxes the field's coordinates for
+  // hit-testing). The mirror is rendered by the same MathLive renderer as the
+  // field, so the preview is pixel-identical to the final result.
   mirror.style.left = `${rect.left}px`
   mirror.style.top = `${rect.top}px`
   mirror.style.width = `${rect.width}px`
+  mirror.style.height = `${rect.height}px`
   mirror.value = mf.value
   let positionSet = false
   if (dragPlaceholderIndex >= 0) {
@@ -281,14 +292,60 @@ function renderPreview(element: EquationElement) {
   if (range && range[0] !== range[1]) {
     mirror.applyStyle({ color: PREVIEW_GREY }, { range })
   }
-  const previewLatex = mirror.value.replace(/\\placeholder(?:\[[^\]]*\])?\{\}/g, '\\square')
-  const markup = convertLatexToMarkup(previewLatex, { letterShapeStyle: 'tex' })
-  previewBox.value = { left: rect.left, top: rect.top, width: rect.width, height: rect.height }
-  insertionPreview.value = markup
+  schedulePreviewSnapshot(mirror)
+}
+
+// MathLive renders fields asynchronously (on the next animation frame), so the
+// mirror must not be shown directly — that would flash stale content. Instead,
+// snapshot its rendered DOM once it has settled and display the snapshot as a
+// static, pixel-identical overlay. A rAF gives the fast path in real browsers;
+// a setTimeout fallback covers environments that suppress nested rAF callbacks
+// (e.g. happy-dom) — the two are idempotent.
+function schedulePreviewSnapshot(mirror: MathfieldElement) {
+  const run = () => {
+    if (!dragging.value || disposed) {
+      return
+    }
+    snapshotPreview(mirror)
+  }
+  cancelAnimationFrame(snapshotRaf)
+  if (snapshotTimer) {
+    clearTimeout(snapshotTimer)
+    snapshotTimer = null
+  }
+  snapshotRaf = requestAnimationFrame(run)
+  snapshotTimer = setTimeout(run, 32)
+}
+
+function snapshotPreview(mirror: MathfieldElement) {
+  const latex = mirror.shadowRoot?.querySelector('.ML__latex') as HTMLElement | null
+  if (!latex) {
+    insertionPreview.value = null
+    previewBox.value = null
+    return
+  }
+  // Hide the real field while the preview is up so its original (un-reflowed)
+  // content never shows through — including placeholder boxes whose top edge
+  // would otherwise peek above the overlay.
+  const mf = getMf()
+  if (mf) {
+    mf.style.visibility = 'hidden'
+  }
+  const box = latex.getBoundingClientRect()
+  previewBox.value = { left: box.left, top: box.top, width: box.width, height: box.height }
+  insertionPreview.value = `<span class="ML__container">${latex.outerHTML}</span>`
 }
 
 function hidePreview() {
   cancelAnimationFrame(previewRaf)
+  cancelAnimationFrame(snapshotRaf)
+  if (snapshotTimer) {
+    clearTimeout(snapshotTimer)
+    snapshotTimer = null
+  }
+  if (mathfield) {
+    mathfield.style.visibility = ''
+  }
   lastPreviewKey = ''
   dragOffset = -1
   dragPlaceholderIndex = -1
@@ -455,29 +512,39 @@ function stringOffsetToModel(mf: MathfieldElement, stringOffset: number): number
   return lo
 }
 
-// Map the caret (model offset) to a string offset in mf.value. getValue(0,
-// position) is not a reliable prefix when the caret sits inside a placeholder
-// or operator branch, so instead count placeholder atoms before the caret and
-// locate the matching `\placeholder{}` token in the serialized value.
-function placeholderCaretOffset(mf: MathfieldElement): number {
-  let index = 0
-  for (let offset = 0; offset < mf.position; offset++) {
-    const info = mf.getElementInfo(offset)
-    if (info?.latex != null && /^\\placeholder(?:\[[^\]]*\])?\{\}$/.test(info.latex)) {
-      index++
-    }
+const CARET_MARKER = '\\bigstar'
+
+// Locate the placeholder under the caret in the serialized LaTeX. Model
+// offsets do not map reliably to string offsets inside operator branches
+// (a sum's scripts serialize in the opposite order of the model, so counting
+// placeholder atoms before the caret lands on the wrong token). Instead the
+// caret's placeholder is briefly replaced by a unique marker, located in the
+// serialized value, and the original value is restored immediately. Undo
+// recording is paused so the round-trip leaves the undo history untouched.
+function unwrapElementAtCaret(mf: MathfieldElement): { latex: string; caretOffset: number } | null {
+  const original = mf.value
+  const controls = mf as unknown as { stopRecording?: () => void; startRecording?: () => void }
+  controls.stopRecording?.()
+  let marked = ''
+  try {
+    mf.insert(CARET_MARKER, {
+      insertionMode: 'replaceSelection',
+      format: 'latex',
+      silenceNotifications: true,
+    })
+    marked = mf.value
+  } catch {
+    marked = ''
+  } finally {
+    controls.startRecording?.()
   }
-  const re = /\\placeholder(?:\[[^\]]*\])?\{\}/g
-  let match
-  let i = 0
-  while ((match = re.exec(mf.value))) {
-    if (i === index) {
-      const openBrace = match[0].lastIndexOf('{')
-      return match.index + openBrace + 1
-    }
-    i++
+  mf.setValue(original, { silenceNotifications: true })
+  const markerIndex = marked.indexOf(CARET_MARKER)
+  if (markerIndex < 0 || marked.indexOf(CARET_MARKER, markerIndex + 1) >= 0) {
+    return null
   }
-  return -1
+  const latex = marked.replace(CARET_MARKER, '\\placeholder{}')
+  return removeElementAtPlaceholder(latex, markerIndex + '\\placeholder{}'.length)
 }
 
 // When the caret sits inside a placeholder that is the sole content of its
@@ -497,18 +564,20 @@ function onMfKeydown(event: KeyboardEvent) {
   if (!isPlaceholder) {
     return
   }
-  const caretString = placeholderCaretOffset(mf)
-  if (caretString < 0) {
-    return
-  }
-  const result = removeElementAtPlaceholder(mf.value, caretString)
+  const result = unwrapElementAtCaret(mf)
   if (!result) {
     return
   }
   event.preventDefault()
   event.stopPropagation()
-  mf.setValue(result.latex, { silenceNotifications: true })
+  const restored = restoreEmptyGroupLatex(result.latex) ?? result.latex
+  mf.setValue(restored, { silenceNotifications: true })
   mf.position = stringOffsetToModel(mf, result.caretOffset)
+  if (restored !== result.latex) {
+    // The unwrap left an empty slot behind (e.g. the argument of a root or a
+    // script of an operator); move the caret into the restored placeholder.
+    enterPlaceholder(mf, mf.position)
+  }
   publishState(mf)
 }
 
@@ -690,6 +759,11 @@ onMounted(() => {
 onBeforeUnmount(() => {
   disposed = true
   cancelAnimationFrame(previewRaf)
+  cancelAnimationFrame(snapshotRaf)
+  if (snapshotTimer) {
+    clearTimeout(snapshotTimer)
+    snapshotTimer = null
+  }
   if (restoreTimer) {
     clearTimeout(restoreTimer)
     restoreTimer = null
@@ -715,44 +789,44 @@ defineExpose({
 </script>
 
 <template>
-  <div
-    ref="containerEl"
-    class="workspace"
-    :class="{ 'workspace-dragging': dragging }"
-    @dragover="onDragOver"
-    @dragleave="onDragLeave"
-    @drop="onDrop"
-    @pointerup="onPointerUp"
-  >
-    <div class="workspace-paper">
-      <math-field
-        class="workspace-field"
-        :style="{ fontSize: `${fontSize}px` }"
-        @input="onMfInput($event.target as unknown as MathfieldElement)"
-        @keydown.capture="onMfKeydown"
-        @undo-state-change="onUndoStateChange($event.target as unknown as MathfieldElement)"
-      ></math-field>
-    </div>
     <div
-      v-if="insertionPreview"
-      class="insertion-preview"
-      :style="{
-        left: `${previewBox?.left ?? 0}px`,
-        top: `${previewBox?.top ?? 0}px`,
-        width: `${previewBox?.width ?? 0}px`,
-        minHeight: `${previewBox?.height ?? 0}px`,
-        fontSize: `${fontSize}px`,
-      }"
-      aria-hidden="true"
-      v-html="insertionPreview"
-    ></div>
-    <Transition name="fade">
-      <div v-if="dragging" class="workspace-drop-hint" aria-hidden="true">
-        Drop to insert at the caret
+      ref="containerEl"
+      class="workspace"
+      :class="{ 'workspace-dragging': dragging }"
+      @dragover="onDragOver"
+      @dragleave="onDragLeave"
+      @drop="onDrop"
+      @pointerup="onPointerUp"
+    >
+      <div class="workspace-paper">
+        <math-field
+          class="workspace-field"
+          :style="{ fontSize: `${fontSize}px` }"
+          @input="onMfInput($event.target as unknown as MathfieldElement)"
+          @keydown.capture="onMfKeydown"
+          @undo-state-change="onUndoStateChange($event.target as unknown as MathfieldElement)"
+        ></math-field>
       </div>
-    </Transition>
-  </div>
-</template>
+      <div
+        v-if="insertionPreview"
+        class="insertion-preview"
+        :style="{
+          left: `${previewBox?.left ?? 0}px`,
+          top: `${previewBox?.top ?? 0}px`,
+          width: `${previewBox?.width ?? 0}px`,
+          height: `${previewBox?.height ?? 0}px`,
+          fontSize: `${fontSize}px`,
+        }"
+        aria-hidden="true"
+        v-html="insertionPreview"
+      ></div>
+      <Transition name="fade">
+        <div v-if="dragging" class="workspace-drop-hint" aria-hidden="true">
+          Drop to insert at the caret
+        </div>
+      </Transition>
+    </div>
+  </template>
 
 <style scoped>
 .workspace {
@@ -777,14 +851,11 @@ defineExpose({
 .workspace-paper {
   position: relative;
   display: flex;
-  align-items: center;
-  justify-content: center;
+  align-items: flex-start;
+  justify-content: flex-start;
   flex: 1;
-  min-height: 200px;
-  padding: 24px;
-  border-radius: 8px;
-  background: var(--paper-bg);
-  box-shadow: var(--paper-shadow);
+  min-height: 0;
+  padding: 0;
 }
 
 .workspace-field {
@@ -798,22 +869,16 @@ defineExpose({
 .insertion-preview {
   position: fixed;
   z-index: 50;
-  display: flex;
-  align-items: flex-start;
-  justify-content: flex-start;
-  box-sizing: border-box;
-  padding: 6px;
   pointer-events: none;
-  background: var(--paper-bg);
-  border-radius: 8px;
-  overflow: hidden;
-  line-height: 1;
+  background: transparent;
 }
 
 .workspace-drop-hint {
-  position: sticky;
+  position: absolute;
   bottom: 12px;
-  align-self: center;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 10;
   padding: 6px 14px;
   border-radius: 999px;
   background: var(--accent);

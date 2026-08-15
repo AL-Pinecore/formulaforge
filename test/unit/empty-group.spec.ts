@@ -29,6 +29,13 @@ describe('restoreEmptyGroupLatex', () => {
     expect(restoreEmptyGroupLatex('x_{}')).toBe('x_{\\placeholder{}}')
   })
 
+  it('restores an operator script left empty by an unwrapped element', () => {
+    expect(restoreEmptyGroupLatex('\\sum_{\\placeholder{}}^{}')).toBe(
+      '\\sum_{\\placeholder{}}^{\\placeholder{}}',
+    )
+    expect(restoreEmptyGroupLatex('\\sqrt{}')).toBe('\\sqrt{\\placeholder{}}')
+  })
+
   it('restores empty delimiters', () => {
     expect(restoreEmptyGroupLatex('\\left(\\right)')).toBe(
       '\\left(\\placeholder{}\\right)',

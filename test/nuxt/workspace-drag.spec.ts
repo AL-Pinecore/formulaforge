@@ -3,10 +3,6 @@ import { mount } from '@vue/test-utils'
 import EquationWorkspace from '~/components/EquationWorkspace.vue'
 import { DRAG_ELEMENT_MIME, draggedElementId } from '~/utils/drag-payload'
 
-vi.mock('mathlive', () => ({
-  convertLatexToMarkup: vi.fn(() => '<span class="ML__latex">preview</span>'),
-}))
-
 class FakeMathField extends HTMLElement {
   inserted: { latex: string; options: Record<string, unknown> }[] = []
   stylesApplied: { style: Record<string, unknown>; range: unknown }[] = []
@@ -19,6 +15,16 @@ class FakeMathField extends HTMLElement {
   mathVirtualKeyboardPolicy = 'manual'
   selection: { ranges: [number, number][] } = { ranges: [[0, 0]] }
   selectionIsCollapsed = true
+  override shadowRoot = {
+    querySelector: (selector: string) =>
+      selector === '.ML__latex'
+        ? ({
+            outerHTML: '<span class="ML__latex">preview</span>',
+            getBoundingClientRect: () => ({ left: 0, top: 0, width: 100, height: 20 }),
+          } as unknown as HTMLElement)
+        : null,
+    querySelectorAll: () => [],
+  } as unknown as ShadowRoot
 
   canUndo() {
     return false
@@ -100,12 +106,16 @@ describe('EquationWorkspace drag and drop', () => {
     )
     await new Promise((resolve) => setTimeout(resolve, 100))
 
-    const preview = wrapper.find('.insertion-preview')
-    expect(preview.exists()).toBe(true)
-    expect(preview.html()).toContain('ML__latex')
+    // the mirror renders the post-insertion formula, then its rendered DOM is
+    // snapshotted into a static overlay shown over the field; the real field is
+    // hidden while the preview is up
+    await vi.waitFor(() => expect(wrapper.find('.insertion-preview').exists()).toBe(true))
+    expect(wrapper.find('.insertion-preview').html()).toContain('ML__latex')
+    const field = wrapper.find('math-field').element as unknown as FakeMathField
+    expect(field.style.visibility).toBe('hidden')
 
     // the inserted element is greyed via applyStyle on the offscreen mirror
-    const mirror = document.querySelector('math-field') as unknown as FakeMathField
+    const mirror = document.querySelector('math-field.workspace-mirror') as unknown as FakeMathField
     expect(mirror.value).toContain('\\frac')
     expect(mirror.stylesApplied.length).toBeGreaterThan(0)
 
@@ -114,6 +124,7 @@ describe('EquationWorkspace drag and drop', () => {
       dragEvent({ dataTransfer: dataTransferWith(() => '', [DRAG_ELEMENT_MIME]) }),
     )
     expect(wrapper.find('.insertion-preview').exists()).toBe(false)
+    expect(field.style.visibility).toBe('')
     expect(draggedElementId.value).toBeNull()
     wrapper.unmount()
   })

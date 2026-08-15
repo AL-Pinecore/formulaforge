@@ -141,11 +141,18 @@ test('drag preview reflects the drop position', async ({ page, goto }) => {
 
   await dragOver(contentBox.left + contentBox.width / 2)
   await expect.poll(mirrorValue).toContain('1\\textcolor{#9ca3af}{+}2')
-  // the markup overlay renders the full equation with the grey + (not just the first glyph)
+  // the overlay shows the full equation with the grey + (not just the first glyph)
   const overlay = page.locator('.insertion-preview')
   await expect(overlay).toContainText('1')
   await expect(overlay).toContainText('2')
-  await expect(overlay.locator('span[style*="#9ca3af"]')).toHaveCount(1)
+  expect(await overlay.locator('span[style*="#9ca3af"]').count()).toBeGreaterThanOrEqual(1)
+  // the real field is hidden while the preview is up
+  await expect
+    .poll(() => page.evaluate(() => getComputedStyle(document.querySelector('.workspace-field')!).visibility))
+    .toBe('hidden')
+  // the preview is not clipped, so tall placeholders (e.g. integral/sum limits)
+  // render at the same height as the final equation
+  expect(await overlay.evaluate((el) => getComputedStyle(el).overflow)).not.toBe('hidden')
 
   await dragOver(contentBox.left + contentBox.width - 1)
   await expect.poll(mirrorValue).toContain('12\\textcolor{#9ca3af}{+}')
@@ -401,6 +408,130 @@ test.describe('dark mode', () => {
     expect(fieldText).toBe('rgb(236, 233, 226)')
 
     const paper = await page.locator('.workspace-paper').evaluate((el) => getComputedStyle(el).backgroundColor)
-    expect(paper).toBe('rgb(29, 32, 37)')
+    expect(paper).toBe('rgba(0, 0, 0, 0)')
+
+    const fieldBorder = await field.evaluate((el) => getComputedStyle(el).borderWidth)
+    expect(fieldBorder).toBe('0px')
   })
+})
+
+test('drag hint does not shift the workspace layout', async ({ page, goto }) => {
+  await goto('/', { waitUntil: 'hydration' })
+  const measure = () =>
+    page.evaluate(() => {
+      const paper = document.querySelector('.workspace-paper')!
+      const field = document.querySelector('math-field')!
+      return {
+        paperHeight: paper.getBoundingClientRect().height,
+        fieldTop: field.getBoundingClientRect().top,
+      }
+    })
+  const before = await measure()
+
+  await page.evaluate(() => {
+    document
+      .querySelector('button[aria-label="Insert Plus"]')!
+      .dispatchEvent(new DragEvent('dragstart', { bubbles: true, cancelable: true, dataTransfer: new DataTransfer() }))
+    const ws = document.querySelector('.workspace')!
+    const r = ws.getBoundingClientRect()
+    ws.dispatchEvent(
+      new DragEvent('dragover', {
+        bubbles: true,
+        cancelable: true,
+        clientX: r.left + 100,
+        clientY: r.top + 100,
+        dataTransfer: new DataTransfer(),
+      }),
+    )
+  })
+  await expect(page.locator('.workspace-drop-hint')).toBeVisible()
+  const during = await measure()
+  expect(Math.abs(during.paperHeight - before.paperHeight)).toBeLessThan(1)
+  expect(Math.abs(during.fieldTop - before.fieldTop)).toBeLessThan(1)
+
+  await page.evaluate(() => {
+    document
+      .querySelector('button[aria-label="Insert Plus"]')!
+      .dispatchEvent(new DragEvent('dragend', { bubbles: true, cancelable: true, dataTransfer: new DataTransfer() }))
+    document
+      .querySelector('.workspace')!
+      .dispatchEvent(new DragEvent('dragleave', { bubbles: true, cancelable: true }))
+  })
+  await expect(page.locator('.workspace-drop-hint')).toHaveCount(0)
+  const after = await measure()
+  expect(Math.abs(after.paperHeight - before.paperHeight)).toBeLessThan(1)
+  expect(Math.abs(after.fieldTop - before.fieldTop)).toBeLessThan(1)
+})
+
+test('backspace unwrapping a sum inside a root restores the root placeholder', async ({ page, goto }) => {
+  await goto('/', { waitUntil: 'hydration' })
+  await page.getByRole('button', { name: 'Insert Square root' }).click()
+  const textarea = page.locator('.latex-textarea')
+  await expect(textarea).toHaveValue(/\\sqrt/, { timeout: 10000 })
+  await page.getByRole('button', { name: 'Insert Sum' }).click()
+  await expect(textarea).toHaveValue(/\\sum/, { timeout: 10000 })
+  await expect(page.locator('math-field')).toBeFocused()
+  await page.keyboard.press('Backspace')
+  await expect(textarea).toHaveValue(/\\sqrt\{\\placeholder\{\}\}/, { timeout: 10000 })
+
+  // the restored placeholder is focused: typing fills it
+  await page.keyboard.type('z')
+  await expect(textarea).toHaveValue(/\\sqrt\{z\}/, { timeout: 10000 })
+})
+
+test('unwrapping a nested fraction restores the parent operator placeholder', async ({ page, goto }) => {
+  await goto('/', { waitUntil: 'hydration' })
+  await page.getByRole('button', { name: 'Insert Sum' }).click()
+  const textarea = page.locator('.latex-textarea')
+  await expect(textarea).toHaveValue(/\\sum/, { timeout: 10000 })
+  await page.getByRole('button', { name: 'Insert Fraction' }).click()
+  await expect(textarea).toHaveValue(/\\frac/, { timeout: 10000 })
+  await expect(page.locator('math-field')).toBeFocused()
+  await page.keyboard.press('Backspace')
+  await expect(textarea).toHaveValue(
+    /\\sum_\{\\placeholder\{\}\}\^\{?\\placeholder\{\}\}?/,
+    { timeout: 10000 },
+  )
+})
+
+test('backspace after dropping a sum onto the root placeholder restores it', async ({ page, goto }) => {
+  await goto('/', { waitUntil: 'hydration' })
+  await page.getByRole('button', { name: 'Insert Square root' }).click()
+  const textarea = page.locator('.latex-textarea')
+  await expect(textarea).toHaveValue(/\\sqrt/, { timeout: 10000 })
+  await page.waitForTimeout(100)
+
+  const phBox = await page.locator('math-field').locator('text=▢').filter({ visible: true }).first().boundingBox()
+
+  await page.evaluate(() => {
+    document
+      .querySelector('button[aria-label="Insert Sum"]')!
+      .dispatchEvent(new DragEvent('dragstart', { bubbles: true, cancelable: true, dataTransfer: new DataTransfer() }))
+  })
+  await page.evaluate(
+    ([x, y]) => {
+      const dt = new DataTransfer()
+      dt.setData('application/x-equation-element', 'sum')
+      document
+        .querySelector('.workspace')!
+        .dispatchEvent(
+          new DragEvent('dragover', {
+            bubbles: true,
+            cancelable: true,
+            clientX: x,
+            clientY: y,
+            dataTransfer: new DataTransfer(),
+          }),
+        )
+      document
+        .querySelector('.workspace')!
+        .dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, clientX: x, clientY: y, dataTransfer: dt }))
+    },
+    [phBox!.x + phBox!.width / 2, phBox!.y + phBox!.height / 2],
+  )
+  await expect(textarea).toHaveValue(/\\sqrt\{\\sum/, { timeout: 10000 })
+  await expect(page.locator('math-field')).toBeFocused()
+
+  await page.keyboard.press('Backspace')
+  await expect(textarea).toHaveValue(/\\sqrt\{\\placeholder\{\}\}/, { timeout: 10000 })
 })
