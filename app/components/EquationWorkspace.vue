@@ -791,6 +791,8 @@ defineExpose({
   display: block;
   width: 100%;
   min-height: 90px;
+  background: transparent;
+  color: var(--text);
 }
 
 .insertion-preview {

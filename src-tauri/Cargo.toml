@@ -1,6 +1,6 @@
 [package]
 name = "formulaforge"
-version = "0.1.0"
+version = "0.1.1"
 description = "Drag-and-drop LaTeX equation editor with image and PDF export"
 authors = ["FormulaForge"]
 edition = "2021"

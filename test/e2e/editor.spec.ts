@@ -379,3 +379,28 @@ test('clear resets the editor, source, preview and export', async ({ page, goto 
   expect(svgCount).toBe(0)
   await expect(page.locator('.export-button')).toBeDisabled()
 })
+
+test.describe('dark mode', () => {
+  test.use({ colorScheme: 'dark' })
+
+  test('palette icons and the equation field follow the dark theme', async ({ page, goto }) => {
+    await goto('/', { waitUntil: 'hydration' })
+
+    const paletteColor = await page.locator('.palette-item').first().evaluate((el) => getComputedStyle(el).color)
+    expect(paletteColor).toBe('rgb(236, 233, 226)')
+
+    const field = page.locator('.workspace-field')
+    const fieldBackground = await field.evaluate((el) => getComputedStyle(el).backgroundColor)
+    expect(fieldBackground).toBe('rgba(0, 0, 0, 0)')
+
+    const fieldText = await field.evaluate((el) => {
+      const root = (el as HTMLElement & { shadowRoot: ShadowRoot }).shadowRoot
+      const latex = root!.querySelector('.ML__latex')
+      return latex ? getComputedStyle(latex).color : ''
+    })
+    expect(fieldText).toBe('rgb(236, 233, 226)')
+
+    const paper = await page.locator('.workspace-paper').evaluate((el) => getComputedStyle(el).backgroundColor)
+    expect(paper).toBe('rgb(29, 32, 37)')
+  })
+})

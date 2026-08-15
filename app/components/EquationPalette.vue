@@ -186,6 +186,7 @@ function onDragEnd() {
   border: 1px solid transparent;
   border-radius: 8px;
   background: transparent;
+  color: var(--text);
   cursor: grab;
   overflow: hidden;
 }
