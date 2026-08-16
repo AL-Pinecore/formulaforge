@@ -16,38 +16,31 @@ vi.mock('~/utils/svg-export', () => ({
   stripXmlDeclaration: (svg: string) => svg,
 }))
 
-function setTauriFlag(value: unknown) {
-  ;(window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = value
-}
+vi.mock('~/utils/browser-export', () => ({
+  svgToRasterBlob: vi.fn(async () => new Blob(['raster'], { type: 'image/png' })),
+  svgToPdfBlob: vi.fn(async () => new Blob(['pdf'], { type: 'application/pdf' })),
+}))
 
 describe('ExportPanel', () => {
   beforeEach(() => {
     delete (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__
   })
 
-  it('defaults to SVG outside Tauri and disables other formats', async () => {
-    const wrapper = await mount(ExportPanel, { props: { latex: 'x' } })
-    expect(wrapper.find('button[data-format="svg"]').attributes('aria-checked')).toBe('true')
-    expect(wrapper.find('button[data-format="png"]').attributes('disabled')).toBeDefined()
-  })
-
-  it('keeps the PNG default in Tauri with all formats enabled', async () => {
-    setTauriFlag({})
+  it('defaults to PNG with all formats enabled', async () => {
     const wrapper = await mount(ExportPanel, { props: { latex: 'x' } })
     expect(wrapper.find('button[data-format="png"]').attributes('aria-checked')).toBe('true')
     expect(wrapper.find('button[data-format="pdf"]').attributes('disabled')).toBeUndefined()
+    expect(wrapper.find('button[data-format="jpeg"]').attributes('disabled')).toBeUndefined()
   })
 
-  it('arrow navigation never selects unsupported formats in the browser', async () => {
+  it('arrow navigation moves to the next format', async () => {
     const wrapper = await mount(ExportPanel, { props: { latex: 'x' } })
     const svg = wrapper.find('button[data-format="svg"]')
     await svg.trigger('keydown', { key: 'ArrowRight' })
-    expect(svg.attributes('aria-checked')).toBe('true')
-    expect(wrapper.find('button[data-format="png"]').attributes('aria-checked')).toBe('false')
+    expect(wrapper.find('button[data-format="png"]').attributes('aria-checked')).toBe('true')
   })
 
-  it('arrow navigation wraps across supported formats in Tauri', async () => {
-    setTauriFlag({})
+  it('arrow navigation wraps across formats', async () => {
     const wrapper = await mount(ExportPanel, { props: { latex: 'x' } })
     await wrapper.find('button[data-format="svg"]').trigger('keydown', { key: 'ArrowLeft' })
     expect(wrapper.find('button[data-format="pdf"]').attributes('aria-checked')).toBe('true')

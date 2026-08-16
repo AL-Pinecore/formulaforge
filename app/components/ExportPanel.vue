@@ -1,36 +1,20 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, reactive, ref } from 'vue'
 import { DEFAULT_EXPORT_SETTINGS } from '~/types/export'
 import type { ExportFormat, ExportSettings } from '~/types/export'
-import { isTauriRuntime, useEquationExport } from '~/composables/useEquationExport'
+import { useEquationExport } from '~/composables/useEquationExport'
 
 const props = defineProps<{ latex: string }>()
 
 const emit = defineEmits<{ toast: [message: string, kind: 'success' | 'error'] }>()
 
-// Detected on the client only: during SSR `window` is undefined and the
-// desktop/browser defaults must not diverge between server and client.
-const tauri = ref(false)
 const settings = reactive<ExportSettings>({ ...DEFAULT_EXPORT_SETTINGS })
 const { exporting, lastError, exportEquation, formats, formatLabels } = useEquationExport()
 const previewError = ref(false)
 const previewHasErrors = ref(false)
 
-onMounted(() => {
-  tauri.value = isTauriRuntime()
-  if (!tauri.value) {
-    settings.format = 'svg'
-  }
-})
-
-function supportsFormat(format: ExportFormat): boolean {
-  return tauri.value || format === 'svg'
-}
-
 function selectFormat(format: ExportFormat) {
-  if (supportsFormat(format)) {
-    settings.format = format
-  }
+  settings.format = format
 }
 
 function onFormatKeydown(event: KeyboardEvent, format: ExportFormat) {
@@ -38,7 +22,7 @@ function onFormatKeydown(event: KeyboardEvent, format: ExportFormat) {
     return
   }
   event.preventDefault()
-  const navigable = formats.filter(supportsFormat)
+  const navigable = formats
   const index = navigable.indexOf(format)
   if (index === -1) {
     return
@@ -106,9 +90,7 @@ async function onExport() {
           role="radio"
           :aria-checked="settings.format === format"
           :data-format="format"
-          :disabled="!supportsFormat(format)"
           :tabindex="settings.format === format ? 0 : -1"
-          :title="supportsFormat(format) ? '' : 'Only available in the desktop app'"
           @click="selectFormat(format)"
           @keydown="onFormatKeydown($event, format)"
         >

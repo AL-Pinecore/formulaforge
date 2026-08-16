@@ -1,6 +1,7 @@
 import { ref } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { renderEquationSvg } from '~/utils/svg-export'
+import { svgToPdfBlob, svgToRasterBlob } from '~/utils/browser-export'
 import { EXPORT_FORMAT_EXTENSIONS, EXPORT_FORMAT_LABELS } from '~/types/export'
 import type { ExportFormat, ExportSettings } from '~/types/export'
 import { buildExportPayload, effectiveExportSettings, EXPORT_FORMAT_ORDER } from '~/utils/export-payload'
@@ -14,8 +15,7 @@ export function isTauriRuntime(): boolean {
   return (window as { isTauri?: boolean }).isTauri === true || '__TAURI_INTERNALS__' in window
 }
 
-function downloadBlob(contents: string, mime: string, filename: string) {
-  const blob = new Blob([contents], { type: mime })
+function downloadBlob(blob: Blob, filename: string) {
   const url = URL.createObjectURL(blob)
   const anchor = document.createElement('a')
   anchor.href = url
@@ -35,10 +35,6 @@ export function useEquationExport() {
     lastError.value = null
     if (!latex.trim()) {
       lastError.value = 'The equation is empty.'
-      return false
-    }
-    if (!isTauriRuntime() && settings.format !== 'svg') {
-      lastError.value = 'Only SVG export is available in the browser. Use the desktop app for other formats.'
       return false
     }
     exporting.value = true
@@ -64,7 +60,22 @@ export function useEquationExport() {
         // The user cancelled the save dialog: not an error, but not a success either.
         return false
       }
-      downloadBlob(rendered.svg, 'image/svg+xml', `equation.${extension}`)
+
+      if (settings.format === 'svg') {
+        downloadBlob(new Blob([rendered.svg], { type: 'image/svg+xml' }), `equation.${extension}`)
+      } else if (settings.format === 'pdf') {
+        const blob = await svgToPdfBlob(rendered.svg, rendered.width, rendered.height)
+        downloadBlob(blob, `equation.${extension}`)
+      } else {
+        const blob = await svgToRasterBlob(
+          rendered.svg,
+          rendered.width,
+          rendered.height,
+          settings.format,
+          effective.jpegQuality,
+        )
+        downloadBlob(blob, `equation.${extension}`)
+      }
       lastPath.value = `equation.${extension}`
       return true
     } catch (error) {
