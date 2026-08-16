@@ -1,6 +1,11 @@
 <div align="center">
 
-# FormulaForge
+<h1>
+  <img src="./src-tauri/icons/icon.png" width="72" height="72" align="absmiddle">
+  &nbsp;
+  FormulaForge
+</h1>
+
 
 [English](./README.en.md) | **中文**
 
