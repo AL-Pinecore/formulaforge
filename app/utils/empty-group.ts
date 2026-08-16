@@ -5,6 +5,9 @@
 // A whole matrix/cases/aligned environment body.
 const ENVIRONMENT = /(\\begin\{[a-zA-Z]+\*?\}(?:\[[^\]]*\])?)([\s\S]*?)(\\end\{[a-zA-Z]+\*?\})/g
 
+const TEXT_COMMAND_SUFFIXES = 'bf|it|md|rm|normal|sc|sf|sl|tt|up'
+const MATH_FONT_COMMANDS = 'rm|bf|bm|it|sf|tt|cal|bb|frak'
+
 function fillEnvironmentCells(body: string): string {
   return body
     .split(/\\\\/)
@@ -20,6 +23,20 @@ function fillEnvironmentCells(body: string): string {
 export function restoreEmptyGroupLatex(latex: string): string | null {
   let result = latex
 
+  // Empty text boxes get an invisible width-bearing phantom instead of a
+  // placeholder: the phantom keeps the space for the gray "Text" hint without
+  // selection capture (other commands keep real placeholders below). Text-mode
+  // commands use `\phantom{Text}`; math-mode font commands use
+  // `\phantom{\text{Text}}` so the letters serialize as text atoms.
+  result = result.replace(
+    new RegExp(`\\\\(text(?:${TEXT_COMMAND_SUFFIXES})?)\\{\\}`, 'g'),
+    '\\$1{\\phantom{Text}}',
+  )
+  result = result.replace(
+    new RegExp(`\\\\(math(?:${MATH_FONT_COMMANDS}))\\{\\}`, 'g'),
+    '\\$1{\\phantom{\\text{Text}}}',
+  )
+
   // Command with an empty mandatory argument: \sqrt{}, \hat{}, \frac{}{} (first
   // brace), \sqrt[n]{}. \placeholder is excluded so we never nest placeholders.
   result = result.replace(
@@ -29,6 +46,14 @@ export function restoreEmptyGroupLatex(latex: string): string | null {
 
   // Empty superscript/subscript: ^{}, _{}
   result = result.replace(/([_^])\{\}/g, '$1{\\placeholder{}}')
+
+  // A bare operator script emptied around a connector (e.g. `\lim_{ \to }`
+  // after placeholders were stripped from `\lim_{\placeholder{} \to
+  // \placeholder{}}`): restore a placeholder on both sides of the connector.
+  result = result.replace(
+    /\\(lim)_\{\s*(\\to|\\rightarrow)\s*\}/g,
+    '\\$1_{\\placeholder{} $2 \\placeholder{}}',
+  )
 
   // Empty \left...\right delimiters (parenthesis/bracket/bar/dot, then braces).
   result = result.replace(

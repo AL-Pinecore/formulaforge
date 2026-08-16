@@ -9,6 +9,22 @@ const emit = defineEmits<{ insert: [element: EquationElement] }>()
 
 const search = ref('')
 
+const collapsed = ref<Set<ElementCategory>>(new Set(ELEMENT_CATEGORY_ORDER))
+
+function isOpen(category: ElementCategory): boolean {
+  return search.value.trim() !== '' || !collapsed.value.has(category)
+}
+
+function toggle(category: ElementCategory) {
+  const next = new Set(collapsed.value)
+  if (next.has(category)) {
+    next.delete(category)
+  } else {
+    next.add(category)
+  }
+  collapsed.value = next
+}
+
 const filtered = computed(() => {
   const query = search.value.trim().toLowerCase()
   if (!query) {
@@ -87,8 +103,16 @@ function onDragEnd() {
     </div>
     <div class="palette-scroll">
       <section v-for="[category, items] in grouped" :key="category" class="palette-section">
-        <h2 class="palette-heading">{{ ELEMENT_CATEGORY_LABELS[category] }}</h2>
-        <ul class="palette-grid">
+        <button
+          type="button"
+          class="palette-heading"
+          :aria-expanded="isOpen(category)"
+          @click="toggle(category)"
+        >
+          <span class="palette-chevron" :class="{ 'palette-chevron-open': isOpen(category) }" aria-hidden="true"></span>
+          <span>{{ ELEMENT_CATEGORY_LABELS[category] }}</span>
+        </button>
+        <ul v-show="isOpen(category)" class="palette-grid">
           <li v-for="element in items" :key="element.id">
             <button
               type="button"
@@ -159,12 +183,44 @@ function onDragEnd() {
 }
 
 .palette-heading {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
   margin: 0 0 6px 2px;
+  padding: 4px 2px;
+  border: none;
+  background: transparent;
   font-size: 11px;
   font-weight: 600;
   letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--text-muted);
+  cursor: pointer;
+  text-align: left;
+}
+
+.palette-heading:hover {
+  color: var(--text);
+}
+
+.palette-heading:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.palette-chevron {
+  flex: none;
+  width: 0;
+  height: 0;
+  border-top: 4px solid transparent;
+  border-bottom: 4px solid transparent;
+  border-left: 5px solid currentColor;
+  transition: transform 120ms ease;
+}
+
+.palette-chevron-open {
+  transform: rotate(90deg);
 }
 
 .palette-grid {

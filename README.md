@@ -13,12 +13,21 @@
 
 </div>
 
+## 声明
+本项目完全由AI完成开发，旨在测试AI项目能力。
+
+主模型：DeepSeek V4 Pro  
+总消耗Token: 925,651,744  
+缓存命中: 903,746,304  
+缓存未命中: 18,103,078  
+输出: 3,802,362
+
+辅助模型：ChatGPT 5.6 Sol
+
 ## 功能
 
 - **拖拽式编辑**：200+ 个公式元素（运算符、函数、分式、根号、求和/积分、希腊字母、逻辑/集合符号、箭头、上下标、矩阵等），可点击或拖拽插入。
 - **实时预览**：基于 MathJax 的所见即所得渲染，导出效果与预览一致。
-- **占位符支持**：插入带占位符的模板（如 `\frac{⬚}{⬚}`），点击即可填入；删除某组内容后自动恢复占位符并聚焦。
-- **插入位置预览**：拖拽时按光标位置实时预览插入后的效果（被插入元素以灰色标出）。
 - **LaTeX 源码**：随时查看/编辑源码，支持复制（原始 / 行内 / 块级）、导入与导出 `.tex` 文件。
 - **导出**：SVG、PNG、JPEG、WebP、PDF（可选背景色、内边距、分辨率、JPEG 质量、行间显示样式）。
 - **桌面端**：基于 Tauri，文件对话框与图像/PDF 渲染在 Rust 侧完成，无浏览器沙箱限制。
@@ -31,7 +40,7 @@
 
 ## 环境要求
 
-- Node.js ≥ 20
+- Node.js ≥ 22
 - Rust stable（含 `rustfmt`、`clippy`，见 `src-tauri/rust-toolchain.toml`）
 - 平台依赖：
   - **macOS**：Xcode Command Line Tools
@@ -94,16 +103,16 @@ public/                 # 由脚本拷贝的 vendor 资源（MathLive 字体、M
 
 ## 脚本速查
 
-| 命令 | 说明 |
-| --- | --- |
-| `npm run dev` | 启动 Nuxt 开发服务器 |
-| `npm run build` | 构建 Nuxt 产物 |
-| `npm run generate` | 静态生成（`NUXT_SSR=false`，供 Tauri 打包使用） |
-| `npm run preview` | 预览构建产物 |
-| `npm run tauri dev` | 桌面应用开发模式 |
-| `npm run tauri build` | 打包桌面应用 |
-| `npm run typecheck` | TypeScript 类型检查 |
-| `npm test` | 运行前端测试 |
-| `npm run test:e2e` | Playwright E2E 测试 |
-| `npm run test:rust` | Rust 单元测试 |
-| `npm run check:rust` | Rust 格式检查 + clippy |
+| 命令                    | 说明                                  |
+|-----------------------|-------------------------------------|
+| `npm run dev`         | 启动 Nuxt 开发服务器                       |
+| `npm run build`       | 构建 Nuxt 产物                          |
+| `npm run generate`    | 静态生成（`NUXT_SSR=false`，供 Tauri 打包使用） |
+| `npm run preview`     | 预览构建产物                              |
+| `npm run tauri dev`   | 桌面应用开发模式                            |
+| `npm run tauri build` | 打包桌面应用                              |
+| `npm run typecheck`   | TypeScript 类型检查                     |
+| `npm test`            | 运行前端测试                              |
+| `npm run test:e2e`    | Playwright E2E 测试                   |
+| `npm run test:rust`   | Rust 单元测试                           |
+| `npm run check:rust`  | Rust 格式检查 + clippy                  |

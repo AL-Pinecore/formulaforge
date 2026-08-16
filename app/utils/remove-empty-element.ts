@@ -302,8 +302,9 @@ function removeLog(latex: string, ph: { start: number; end: number }): RemoveRes
   return null
 }
 
-// `\sqrt[#]{#}`: deleting the optional-index placeholder unwraps the whole
-// command when the main argument is also empty, otherwise just drops the index.
+// `\sqrt[#]{#}`: deleting the optional-index placeholder drops the index and
+// leaves the (possibly empty) main argument behind, turning the n-th root into
+// a plain root. A second Backspace on the body then removes the whole command.
 function removeOptionalIndex(latex: string, ph: { start: number; end: number }): RemoveResult | null {
   let i = ph.start - 1
   while (i >= 0 && /\s/.test(latex.charAt(i))) i--
@@ -321,15 +322,6 @@ function removeOptionalIndex(latex: string, ph: { start: number; end: number }):
   const before = latex.slice(0, i)
   const cmd = before.match(/\\[a-zA-Z]+$/)
   if (!cmd) return null
-  const cmdStart = i - cmd[0]!.length
-  let k = j + 1
-  while (k < latex.length && /\s/.test(latex.charAt(k))) k++
-  if (latex.charAt(k) === '{') {
-    const mainClose = matchingBrace(latex, k)
-    if (mainClose >= 0 && isPlaceholderOnly(latex.slice(k + 1, mainClose))) {
-      return { latex: latex.slice(0, cmdStart) + latex.slice(mainClose + 1), caretOffset: cmdStart }
-    }
-  }
   return { latex: latex.slice(0, i) + latex.slice(j + 1), caretOffset: i }
 }
 

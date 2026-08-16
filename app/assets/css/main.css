@@ -2,6 +2,7 @@
   color-scheme: light dark;
   --accent: #2563eb;
   --accent-soft: #dbeafe;
+  --text-box-highlight: #93c5fd;
   --toolbar-bg: #fbfaf7;
   --panel-bg: #f5f3ee;
   --workspace-bg: #ece9e1;
@@ -11,6 +12,7 @@
   --input-bg: #ffffff;
   --hover-bg: #e9e6de;
   --border: #d8d4c8;
+  --placeholder-bg: #b5b5b5;
   --text: #23201a;
   --text-muted: #6f6a5e;
   --danger: #b42318;
@@ -26,6 +28,7 @@
   :root {
     --accent: #60a5fa;
     --accent-soft: #1e3a5f;
+    --text-box-highlight: #1e40af;
     --toolbar-bg: #191b1e;
     --panel-bg: #141619;
     --workspace-bg: #101215;
@@ -35,6 +38,7 @@
     --input-bg: #23262b;
     --hover-bg: #22252a;
     --border: #31353c;
+    --placeholder-bg: #3a3d42;
     --text: #ece9e2;
     --text-muted: #a29d8f;
     --danger: #fda29b;
@@ -126,6 +130,8 @@ math-field {
   --caret-color: var(--accent);
   --contains-highlight-background-color: var(--accent-soft);
   --selection-background-color: var(--accent-soft);
+  --text-highlight-background-color: transparent;
+  --highlight-text: transparent;
   --text-font-family: 'Times New Roman', 'STIX Two Math', serif;
   --smart-fence-color: var(--accent);
   border: none;
@@ -138,4 +144,22 @@ math-field::part(virtual-keyboard-toggle) {
 
 math-field::part(menu-toggle) {
   display: none;
+}
+
+/* Placeholder box: applied to the drag-preview overlay, which renders the
+   mirror's snapshot in the light DOM (the live fields get the same rule via a
+   shadow-DOM injected stylesheet). Uses background (not border/padding) so it
+   never changes the layout size (avoids a MathLive resize -> re-render loop).
+   The ▢ glyph is made transparent so only the gray block shows. */
+.ml-placeholder {
+  color: transparent;
+  background-image: linear-gradient(var(--placeholder-bg), var(--placeholder-bg));
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: calc(100% - 2px) 0.76em;
+}
+
+.ml-placeholder.ML__selected {
+  color: transparent;
+  background: transparent;
 }

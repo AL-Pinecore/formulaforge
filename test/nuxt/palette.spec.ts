@@ -46,6 +46,36 @@ describe('EquationPalette', () => {
     expect(wrapper.find('.palette-empty').exists()).toBe(true)
   })
 
+  it('collapses categories by default and toggles independently', async () => {
+    const wrapper = mount(EquationPalette)
+    const headings = wrapper.findAll('button.palette-heading')
+    const grids = wrapper.findAll('ul.palette-grid')
+    const isHidden = (grid: ReturnType<typeof wrapper.find>) =>
+      (grid.attributes('style') ?? '').includes('display: none')
+    expect(headings.length).toBeGreaterThan(5)
+    expect(grids.length).toBe(headings.length)
+    // all grids are collapsed (hidden) by default, but still in the DOM
+    expect(grids.every((grid) => isHidden(grid))).toBe(true)
+    expect(grids[0]!.exists()).toBe(true)
+
+    await headings[0]!.trigger('click')
+    expect(isHidden(grids[0]!)).toBe(false)
+    // other categories stay collapsed (independent toggles)
+    expect(isHidden(grids[1]!)).toBe(true)
+
+    await headings[0]!.trigger('click')
+    expect(isHidden(grids[0]!)).toBe(true)
+  })
+
+  it('auto-expands matching categories while searching', async () => {
+    const wrapper = mount(EquationPalette)
+    await wrapper.find('#palette-search').setValue('sqrt')
+    const visibleGrids = wrapper
+      .findAll('ul.palette-grid')
+      .filter((grid) => !(grid.attributes('style') ?? '').includes('display: none'))
+    expect(visibleGrids.length).toBeGreaterThan(0)
+  })
+
   it('marks chips as draggable', () => {
     const wrapper = mount(EquationPalette)
     expect(wrapper.find('button.palette-item').attributes('draggable')).toBe('true')

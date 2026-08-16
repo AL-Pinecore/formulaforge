@@ -1,4 +1,28 @@
 import { expect, test } from '@nuxt/test-utils/playwright'
+import type { Locator, Page } from '@playwright/test'
+import { measurePaintedFractionGaps } from './painted-pixels'
+
+// Palette categories are collapsed by default, so expand a category before
+// interacting with its buttons.
+async function expandCategory(page: Page, label: string) {
+  const heading = page.getByRole('button', { name: label, exact: true })
+  if ((await heading.getAttribute('aria-expanded')) !== 'true') {
+    await heading.click()
+  }
+}
+
+async function insertElement(page: Page, label: string, category: string) {
+  await expandCategory(page, category)
+  await page.getByRole('button', { name: `Insert ${label}`, exact: true }).click()
+}
+
+async function simCaretDistanceFromHint(caret: Locator, hint: Locator): Promise<number> {
+  const [caretBox, hintBox] = await Promise.all([caret.boundingBox(), hint.boundingBox()])
+  if (!caretBox || !hintBox) {
+    return Infinity
+  }
+  return Math.abs(caretBox.x + caretBox.width / 2 - hintBox.x)
+}
 
 test('loads the editor shell', async ({ page, goto }) => {
   await goto('/', { waitUntil: 'hydration' })
@@ -12,9 +36,1111 @@ test('loads the editor shell', async ({ page, goto }) => {
 test('inserts a fraction from the palette into the equation', async ({ page, goto }) => {
   await goto('/', { waitUntil: 'hydration' })
   await expect(page.locator('math-field')).toBeVisible()
-  await page.getByRole('button', { name: 'Insert Fraction' }).click()
+  await insertElement(page, 'Fraction', 'Fractions')
   const latex = await page.locator('.latex-textarea').inputValue()
   expect(latex).toContain('\\frac')
+})
+
+test('dragging a font style onto a Text box restyles it', async ({ page, goto }) => {
+  await goto('/', { waitUntil: 'hydration' })
+  await insertElement(page, 'Text', 'Text')
+  const textarea = page.locator('.latex-textarea')
+  await expect(textarea).toHaveValue('\\text{}', { timeout: 10000 })
+  await expect(page.locator('math-field')).toBeFocused()
+  await page.keyboard.type('hello')
+  await expect(textarea).toHaveValue('\\text{hello}', { timeout: 10000 })
+  await page.waitForTimeout(100)
+
+  const target = await page.locator('math-field').evaluate((el) => {
+    const root = (el as HTMLElement & { shadowRoot: ShadowRoot }).shadowRoot
+    const r = root!.querySelector('.ML__text')!.getBoundingClientRect()
+    return { left: r.left, top: r.top, width: r.width, height: r.height }
+  })
+  const x = target.left + target.width / 2
+  const y = target.top + target.height / 2
+
+  await page.evaluate(() => {
+    document
+      .querySelector('button[aria-label="Insert Bold"]')!
+      .dispatchEvent(new DragEvent('dragstart', { bubbles: true, cancelable: true, dataTransfer: new DataTransfer() }))
+  })
+  await page.evaluate(
+    ([cx, cy]) => {
+      document
+        .querySelector('.workspace')!
+        .dispatchEvent(
+          new DragEvent('dragover', { bubbles: true, cancelable: true, clientX: cx, clientY: cy, dataTransfer: new DataTransfer() }),
+        )
+    },
+    [x, y],
+  )
+  await page.evaluate(
+    ([cx, cy]) => {
+      const dt = new DataTransfer()
+      dt.setData('application/x-equation-element', 'mathbf')
+      document
+        .querySelector('.workspace')!
+        .dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, clientX: cx, clientY: cy, dataTransfer: dt }))
+      document
+        .querySelector('button[aria-label="Insert Bold"]')!
+        .dispatchEvent(new DragEvent('dragend', { bubbles: true, cancelable: true, dataTransfer: new DataTransfer() }))
+    },
+    [x, y],
+  )
+  await expect(textarea).toHaveValue('\\textbf{hello}', { timeout: 10000 })
+
+  const field = page.locator('math-field.workspace-field')
+  await field.evaluate((element) => {
+    const mf = element as unknown as {
+      lastOffset: number
+      position: number
+      focus(): void
+      getElementInfo(offset: number): { latex?: string } | undefined
+    }
+    mf.focus()
+    for (let offset = mf.lastOffset; offset >= 0; offset--) {
+      if (mf.getElementInfo(offset)?.latex?.endsWith('{o}')) {
+        mf.position = offset
+        break
+      }
+    }
+  })
+  await expect(field).toBeFocused()
+  await page.keyboard.type('z')
+  await expect(textarea).toHaveValue('\\textbf{helloz}', { timeout: 10000 })
+})
+
+test('text boundaries stay internal and require two left moves at the first character', async ({
+  page,
+  goto,
+}) => {
+  await goto('/', { waitUntil: 'hydration' })
+  const textarea = page.locator('.latex-textarea')
+  await textarea.fill('\\text{Tex}')
+  await textarea.blur()
+  await expect(textarea).toHaveValue('\\text{Tex}')
+
+  const field = page.locator('math-field')
+  const internal = await field.evaluate((element) => {
+    const mf = element as unknown as {
+      value: string
+      lastOffset: number
+      position: number
+      focus(): void
+      getElementInfo(offset: number): { latex?: string } | undefined
+    }
+    mf.focus()
+    for (let offset = 0; offset <= mf.lastOffset; offset++) {
+      if (mf.getElementInfo(offset)?.latex === '\\text{T}') {
+        mf.position = offset
+        break
+      }
+    }
+    return mf.value
+  })
+  expect(internal).toContain('\\mkern0mu')
+  await expect(field).toBeFocused()
+
+  await page.keyboard.press('ArrowLeft')
+  await expect(field).toHaveClass(/caret-in-text/)
+  await page.keyboard.press('ArrowLeft')
+  await expect(field).not.toHaveClass(/caret-in-text/)
+  await page.keyboard.type('a')
+  await expect(textarea).toHaveValue('a\\text{Tex}', { timeout: 10000 })
+})
+
+test('right arrow and a right-side click continue after a final Text box', async ({ page, goto }) => {
+  await goto('/', { waitUntil: 'hydration' })
+  const textarea = page.locator('.latex-textarea')
+  const field = page.locator('math-field')
+  await textarea.fill('\\text{Tex}')
+  await textarea.blur()
+
+  await field.evaluate((element) => {
+    const mf = element as unknown as {
+      lastOffset: number
+      position: number
+      focus(): void
+      getElementInfo(offset: number): { latex?: string } | undefined
+    }
+    mf.focus()
+    for (let offset = mf.lastOffset; offset >= 0; offset--) {
+      if (mf.getElementInfo(offset)?.latex === '\\text{x}') {
+        mf.position = offset
+        break
+      }
+    }
+  })
+  await expect(field).toBeFocused()
+  await page.keyboard.press('ArrowRight')
+  await expect(field).not.toHaveClass(/caret-in-text/)
+  await page.keyboard.type('x')
+  await expect(textarea).toHaveValue('\\text{Tex}x', { timeout: 10000 })
+
+  await textarea.fill('\\text{Tex}')
+  await textarea.blur()
+  await expect(field.locator('.ML__text').first()).toBeVisible()
+  const textBounds = await field.locator('.ML__text').evaluateAll((nodes) => {
+    const rects = nodes.map((node) => node.getBoundingClientRect())
+    return {
+      right: Math.max(...rects.map((rect) => rect.right)),
+      top: Math.min(...rects.map((rect) => rect.top)),
+      bottom: Math.max(...rects.map((rect) => rect.bottom)),
+    }
+  })
+  await page.mouse.click(textBounds.right + 12, (textBounds.top + textBounds.bottom) / 2)
+  await page.keyboard.type('y')
+  await expect(textarea).toHaveValue('\\text{Tex}y', { timeout: 10000 })
+})
+
+test('Delete right after a Text box edits the text without corrupting markers', async ({
+  page,
+  goto,
+}) => {
+  await goto('/', { waitUntil: 'hydration' })
+  const textarea = page.locator('.latex-textarea')
+  const field = page.locator('math-field')
+  await textarea.fill('\\text{jjjj}')
+  await textarea.blur()
+  await expect(textarea).toHaveValue('\\text{jjjj}')
+
+  const cleanPublic = async () => {
+    const latex = await textarea.inputValue()
+    expect(latex).not.toContain('mkern')
+    expect(latex).not.toContain('phantom')
+    expect(latex).not.toContain('textbackslash')
+    expect(latex).not.toContain('textbraceleft')
+    expect(latex).not.toContain('textbraceright')
+  }
+
+  const setCaretAfterText = () =>
+    field.evaluate((element) => {
+      const mf = element as unknown as {
+        lastOffset: number
+        position: number
+        focus(): void
+        getElementInfo(offset: number): { latex?: string } | undefined
+      }
+      mf.focus()
+      for (let offset = mf.lastOffset; offset >= 0; offset--) {
+        if (mf.getElementInfo(offset)?.latex === '\\text{j}') {
+          mf.position = offset
+          break
+        }
+      }
+    })
+
+  await setCaretAfterText()
+  await expect(field).toBeFocused()
+  await page.keyboard.press('Delete')
+  await expect(textarea).toHaveValue('\\text{jjj}', { timeout: 10000 })
+  await cleanPublic()
+
+  await page.keyboard.press('Delete')
+  await expect(textarea).toHaveValue('\\text{jj}', { timeout: 10000 })
+  await page.keyboard.press('Delete')
+  await expect(textarea).toHaveValue('\\text{j}', { timeout: 10000 })
+  await page.keyboard.press('Delete')
+  await expect(textarea).toHaveValue('\\text{}', { timeout: 10000 })
+  await cleanPublic()
+
+  await textarea.fill('\\text{jjjj}')
+  await textarea.blur()
+  await field.evaluate((element) => {
+    const mf = element as unknown as { lastOffset: number; position: number; focus(): void }
+    mf.focus()
+    mf.position = mf.lastOffset
+  })
+  await expect(field).toBeFocused()
+  await page.keyboard.press('Backspace')
+  await expect(textarea).toHaveValue('\\text{jjj}', { timeout: 10000 })
+  await cleanPublic()
+
+  await page.getByRole('button', { name: 'Undo', exact: true }).click()
+  await expect(textarea).toHaveValue('\\text{jjjj}', { timeout: 10000 })
+})
+
+test('typing after escaping an empty Text box keeps the box and input clean', async ({
+  page,
+  goto,
+}) => {
+  await goto('/', { waitUntil: 'hydration' })
+  await insertElement(page, 'Text', 'Text')
+  const textarea = page.locator('.latex-textarea')
+  const field = page.locator('math-field')
+  await expect(textarea).toHaveValue('\\text{}', { timeout: 10000 })
+  await expect(field).toBeFocused()
+
+  await page.keyboard.press('ArrowRight')
+  await page.keyboard.type('ab')
+  await expect(textarea).toHaveValue('\\text{}ab', { timeout: 10000 })
+  const latex = await textarea.inputValue()
+  expect(latex).not.toContain('mkern')
+  expect(latex).not.toContain('textbackslash')
+
+  await page.getByRole('button', { name: 'Clear', exact: true }).click()
+  await insertElement(page, 'Text', 'Text')
+  await expect(textarea).toHaveValue('\\text{}', { timeout: 10000 })
+  await expect(field).toBeFocused()
+  await page.keyboard.press('ArrowLeft')
+  await page.keyboard.type('xy')
+  await expect(textarea).toHaveValue('xy\\text{}', { timeout: 10000 })
+})
+
+test('an empty Text box keeps the gray hint and parks the caret in front of it', async ({
+  page,
+  goto,
+}) => {
+  await goto('/', { waitUntil: 'hydration' })
+  const textarea = page.locator('.latex-textarea')
+  const field = page.locator('math-field')
+  await insertElement(page, 'Text', 'Text')
+  await expect(textarea).toHaveValue('\\text{}', { timeout: 10000 })
+  await expect(field).toBeFocused()
+
+  // The hint word is visible while the box is empty, and a simulated caret is
+  // overlaid in front of its first character (the native caret is hidden here).
+  const hint = page.locator('.text-hint').first()
+  await expect(hint).toBeVisible()
+  await expect(hint).toHaveText('Text')
+  const caret = await field.evaluate((element) => {
+    const mf = element as unknown as {
+      position: number
+      lastOffset: number
+      selectionIsCollapsed: boolean
+      getElementInfo(offset: number): { latex?: string } | undefined
+    }
+    let first = -1
+    for (let offset = 0; offset <= mf.lastOffset; offset++) {
+      const latex = mf.getElementInfo(offset)?.latex
+      if (latex === '\\text{\\phantom{Text}}' || latex?.startsWith('\\text{T')) {
+        first = offset
+        break
+      }
+    }
+    return { position: mf.position, before: first - 1, collapsed: mf.selectionIsCollapsed }
+  })
+  expect(caret.collapsed).toBe(true)
+  expect(caret.position).toBe(caret.before)
+  await expect(page.locator('.caret-text-hl')).toHaveCount(0)
+  const simCaret = page.locator('.sim-caret')
+  await expect(simCaret).toHaveCount(1)
+  await expect.poll(() => simCaretDistanceFromHint(simCaret, hint)).toBeLessThan(4)
+
+  await page.keyboard.type('h')
+  await expect(textarea).toHaveValue('\\text{h}', { timeout: 10000 })
+  await expect(page.locator('.text-hint')).toHaveCount(0)
+  await expect(page.locator('.sim-caret')).toHaveCount(0)
+  const latex = await textarea.inputValue()
+  expect(latex).not.toContain('phantom')
+  expect(latex).not.toContain('mkern')
+})
+
+test('clicking an empty Text box focuses it and types into the box', async ({ page, goto }) => {
+  await goto('/', { waitUntil: 'hydration' })
+  const textarea = page.locator('.latex-textarea')
+  await textarea.fill('a\\text{}b')
+  await textarea.blur()
+  await expect(textarea).toHaveValue('a\\text{}b')
+
+  const hint = page.locator('.text-hint').first()
+  await expect(hint).toBeVisible()
+  const box = await hint.boundingBox()
+  await page.mouse.click(box!.x + box!.width / 2, box!.y + box!.height / 2)
+  const caret = await page.locator('math-field').evaluate((element) => {
+    const mf = element as unknown as {
+      position: number
+      lastOffset: number
+      selectionIsCollapsed: boolean
+      getElementInfo(offset: number): { latex?: string } | undefined
+    }
+    let first = -1
+    for (let offset = 0; offset <= mf.lastOffset; offset++) {
+      const latex = mf.getElementInfo(offset)?.latex
+      if (latex === '\\text{\\phantom{Text}}' || latex?.startsWith('\\text{T')) {
+        first = offset
+        break
+      }
+    }
+    return { position: mf.position, before: first - 1, collapsed: mf.selectionIsCollapsed }
+  })
+  expect(caret.collapsed).toBe(true)
+  expect(caret.position).toBe(caret.before)
+  await expect(page.locator('.caret-text-hl')).toHaveCount(0)
+  const simCaret = page.locator('.sim-caret')
+  await expect(simCaret).toHaveCount(1)
+  await expect.poll(() => simCaretDistanceFromHint(simCaret, hint)).toBeLessThan(4)
+
+  // MathLive defers the actual keyboard-sink focus ~60ms after focus(); wait for
+  // it to settle so a natural blur (moving focus to the source textarea) is not
+  // immediately undone by that deferred focus.
+  await page.waitForTimeout(150)
+  await page.locator('.latex-textarea').focus()
+  await expect(page.locator('.sim-caret')).toHaveCount(0)
+
+  await page.mouse.click(box!.x + box!.width / 2, box!.y + box!.height / 2)
+  await expect(page.locator('.sim-caret')).toHaveCount(1)
+  await page.keyboard.type('z')
+  await expect(textarea).toHaveValue('a\\text{z}b', { timeout: 10000 })
+  await expect(page.locator('.sim-caret')).toHaveCount(0)
+})
+
+async function dropTextElement(page: import('@playwright/test').Page, x: number, y: number) {
+  await page.evaluate(() => {
+    document
+      .querySelector('button[aria-label="Insert Text"]')!
+      .dispatchEvent(new DragEvent('dragstart', { bubbles: true, cancelable: true, dataTransfer: new DataTransfer() }))
+  })
+  await page.evaluate(
+    ([cx, cy]) => {
+      document
+        .querySelector('.workspace')!
+        .dispatchEvent(
+          new DragEvent('dragover', {
+            bubbles: true,
+            cancelable: true,
+            clientX: cx,
+            clientY: cy,
+            dataTransfer: new DataTransfer(),
+          }),
+        )
+    },
+    [x, y],
+  )
+  await page.evaluate(
+    ([cx, cy]) => {
+      const dt = new DataTransfer()
+      dt.setData('application/x-equation-element', 'text')
+      document
+        .querySelector('.workspace')!
+        .dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, clientX: cx, clientY: cy, dataTransfer: dt }))
+      document
+        .querySelector('button[aria-label="Insert Text"]')!
+        .dispatchEvent(new DragEvent('dragend', { bubbles: true, cancelable: true, dataTransfer: new DataTransfer() }))
+    },
+    [x, y],
+  )
+}
+
+async function dragStyleElement(
+  page: import('@playwright/test').Page,
+  id: string,
+  label: string,
+  x: number,
+  y: number,
+) {
+  await page.evaluate((l) => {
+    document
+      .querySelector(`button[aria-label="${l}"]`)!
+      .dispatchEvent(new DragEvent('dragstart', { bubbles: true, cancelable: true, dataTransfer: new DataTransfer() }))
+  }, label)
+  await page.evaluate(
+    ([cx, cy]) => {
+      document
+        .querySelector('.workspace')!
+        .dispatchEvent(
+          new DragEvent('dragover', { bubbles: true, cancelable: true, clientX: cx, clientY: cy, dataTransfer: new DataTransfer() }),
+        )
+    },
+    [x, y],
+  )
+  await page.evaluate(
+    ([cx, cy, eid, l]: [number, number, string, string]) => {
+      const dt = new DataTransfer()
+      dt.setData('application/x-equation-element', eid)
+      document
+        .querySelector('.workspace')!
+        .dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, clientX: cx, clientY: cy, dataTransfer: dt }))
+      document
+        .querySelector(`button[aria-label="${l}"]`)!
+        .dispatchEvent(new DragEvent('dragend', { bubbles: true, cancelable: true, dataTransfer: new DataTransfer() }))
+    },
+    [x, y, id, label] as [number, number, string, string],
+  )
+}
+
+test('a dropped Text element lands with a visible caret ready for typing', async ({ page, goto }) => {
+  await goto('/', { waitUntil: 'hydration' })
+  const textarea = page.locator('.latex-textarea')
+  const field = page.locator('math-field.workspace-field')
+  const workspace = page.locator('.workspace')
+  const box = await workspace.boundingBox()
+  await dropTextElement(page, box!.x + box!.width / 2, box!.y + box!.height / 2)
+
+  await expect(textarea).toHaveValue('\\text{}', { timeout: 10000 })
+  await expect(field).toBeFocused()
+  await expect(page.locator('.text-hint').first()).toBeVisible()
+  await page.keyboard.type('h')
+  await expect(textarea).toHaveValue('\\text{h}', { timeout: 10000 })
+})
+
+test('dropping a Text element onto an empty Text box is ignored', async ({
+  page,
+  goto,
+}) => {
+  await goto('/', { waitUntil: 'hydration' })
+  const textarea = page.locator('.latex-textarea')
+  await expandCategory(page, 'Text')
+  await page.getByRole('button', { name: 'Insert Text', exact: true }).click()
+  await expect(textarea).toHaveValue('\\text{}', { timeout: 10000 })
+  await expect(page.locator('math-field')).toBeFocused()
+  await page.waitForTimeout(200)
+
+  const hint = page.locator('.text-hint').first()
+  await expect(hint).toBeVisible()
+  const box = await hint.boundingBox()
+  await dropTextElement(page, box!.x + box!.width / 2, box!.y + box!.height / 2)
+
+  // Inserting another Text box inside or next to one is disabled (they would
+  // merge anyway): the formula keeps a single empty box.
+  await expect(textarea).toHaveValue('\\text{}', { timeout: 10000 })
+  const latex = await textarea.inputValue()
+  expect(latex).not.toContain('mkern')
+  expect(latex).not.toContain('phantom')
+  expect(latex).not.toContain('$')
+  await expect(page.locator('.text-hint')).toHaveCount(1)
+})
+
+test('clicking Insert Text twice keeps a single empty box', async ({ page, goto }) => {
+  await goto('/', { waitUntil: 'hydration' })
+  const textarea = page.locator('.latex-textarea')
+  await expandCategory(page, 'Text')
+  await page.getByRole('button', { name: 'Insert Text', exact: true }).click()
+  await expect(textarea).toHaveValue('\\text{}', { timeout: 10000 })
+  await expect(page.locator('math-field')).toBeFocused()
+  await page.waitForTimeout(200)
+
+  await page.getByRole('button', { name: 'Insert Text', exact: true }).click()
+  await expect(textarea).toHaveValue('\\text{}', { timeout: 10000 })
+  const latex = await textarea.inputValue()
+  expect(latex).not.toContain('mkern')
+  expect(latex).not.toContain('phantom')
+  expect(latex).not.toContain('$')
+  await expect(page.locator('.text-hint')).toHaveCount(1)
+
+  await page.keyboard.type('hi')
+  await expect(textarea).toHaveValue('\\text{hi}', { timeout: 10000 })
+})
+
+test('only the Text box holding the caret is highlighted', async ({ page, goto }) => {
+  await goto('/', { waitUntil: 'hydration' })
+  const textarea = page.locator('.latex-textarea')
+  const field = page.locator('math-field')
+  await textarea.fill('\\text{A}+\\text{B}')
+  await textarea.blur()
+  await expect(textarea).toHaveValue('\\text{A}+\\text{B}')
+  await page.waitForTimeout(200)
+
+  const highlight = page.locator('.caret-text-hl')
+  await expect(highlight).toHaveCount(0)
+
+  const setCaretAt = (letter: string) =>
+    field.evaluate((element, ch) => {
+      const mf = element as unknown as {
+        lastOffset: number
+        position: number
+        focus(): void
+        getElementInfo(offset: number): { latex?: string } | undefined
+      }
+      mf.focus()
+      for (let offset = 0; offset <= mf.lastOffset; offset++) {
+        if (mf.getElementInfo(offset)?.latex === `\\text{${ch}}`) {
+          mf.position = offset
+          return
+        }
+      }
+    }, letter)
+
+  const currentTextBounds = () =>
+    field.evaluate((element) => {
+      const mf = element as unknown as {
+        position: number
+        lastOffset: number
+        getElementInfo(offset: number): {
+          latex?: string
+          mode?: string
+          style?: unknown
+          bounds?: { left: number; top: number; right: number; bottom: number }
+        } | undefined
+      }
+      const isText = (offset: number) => {
+        const latex = mf.getElementInfo(offset)?.latex
+        return Boolean(latex?.startsWith('\\text') && latex !== '\\mkern0mu')
+      }
+      let atom = mf.position
+      if (!isText(atom)) {
+        atom = isText(atom + 1) ? atom + 1 : isText(atom - 1) ? atom - 1 : -1
+      }
+      if (atom < 0) {
+        return null
+      }
+      const runKey = (offset: number) => {
+        const info = mf.getElementInfo(offset)
+        return JSON.stringify([info?.mode, info?.style ?? null])
+      }
+      const key = runKey(atom)
+      let first = atom
+      let last = atom
+      while (first > 0 && isText(first - 1) && runKey(first - 1) === key) {
+        first--
+      }
+      while (last < mf.lastOffset && isText(last + 1) && runKey(last + 1) === key) {
+        last++
+      }
+      let left = Infinity
+      let top = Infinity
+      let right = -Infinity
+      let bottom = -Infinity
+      for (let offset = first; offset <= last; offset++) {
+        const bounds = mf.getElementInfo(offset)?.bounds
+        if (bounds) {
+          left = Math.min(left, bounds.left)
+          top = Math.min(top, bounds.top)
+          right = Math.max(right, bounds.right)
+          bottom = Math.max(bottom, bounds.bottom)
+        }
+      }
+      return Number.isFinite(left) ? { left, top, right, bottom } : null
+    })
+
+  const highlightMatchesCurrentText = async () => {
+    const hl = await highlight.boundingBox()
+    const bounds = await currentTextBounds()
+    return Boolean(
+      hl &&
+        bounds &&
+        Math.abs(hl.x - bounds.left) < 2 &&
+        Math.abs(hl.y - bounds.top) < 2 &&
+        Math.abs(hl.x + hl.width - bounds.right) < 2 &&
+        Math.abs(hl.y + hl.height - bounds.bottom) < 2,
+    )
+  }
+
+  for (const letter of ['A', 'B']) {
+    await setCaretAt(letter)
+    await expect(field).toBeFocused()
+    await expect(highlight).toHaveCount(1)
+    await expect.poll(highlightMatchesCurrentText).toBe(true)
+  }
+
+  await field.evaluate((element) => {
+    const mf = element as unknown as { lastOffset: number; position: number; focus(): void }
+    mf.focus()
+    mf.position = mf.lastOffset
+  })
+  await expect(highlight).toHaveCount(0)
+})
+
+test('a Text box nested in a fraction highlights only the text, not the container', async ({
+  page,
+  goto,
+}) => {
+  await goto('/', { waitUntil: 'hydration' })
+  const textarea = page.locator('.latex-textarea')
+  const field = page.locator('math-field')
+  await textarea.fill('\\frac{\\text{MW}}{x}')
+  await textarea.blur()
+  await expect(textarea).toHaveValue('\\frac{\\text{MW}}{x}')
+  await page.waitForTimeout(200)
+
+  await field.evaluate((element) => {
+    const mf = element as unknown as {
+      focus(): void
+      position: number
+      lastOffset: number
+      getElementInfo(offset: number): { latex?: string } | undefined
+    }
+    mf.focus()
+    for (let offset = 0; offset <= mf.lastOffset; offset++) {
+      if (mf.getElementInfo(offset)?.latex?.startsWith('\\text')) {
+        mf.position = offset
+        return
+      }
+    }
+  })
+  await expect(field).toHaveClass(/caret-in-text/)
+
+  // MathLive's built-in "contains" highlight (which otherwise paints the whole
+  // fraction over the text box) must be transparent while the caret is in text.
+  await expect
+    .poll(() =>
+      field.evaluate((element) => {
+        const hl = element.shadowRoot?.querySelector('.ML__contains-highlight')
+        return hl ? getComputedStyle(hl).backgroundColor === 'rgba(0, 0, 0, 0)' : true
+      }),
+    )
+    .toBe(true)
+  await expect(page.locator('.caret-text-hl')).toHaveCount(1)
+})
+
+test('Text highlight follows typing and deletion without stale character width', async ({
+  page,
+  goto,
+}) => {
+  await goto('/', { waitUntil: 'hydration' })
+  const textarea = page.locator('.latex-textarea')
+  const field = page.locator('math-field')
+  const highlight = page.locator('.caret-text-hl')
+  await insertElement(page, 'Text', 'Text')
+  await expect(textarea).toHaveValue('\\text{}', { timeout: 10000 })
+  await expect(highlight).toHaveCount(0)
+
+  const visibleTextBounds = () =>
+    field.evaluate((element) => {
+      const mf = element as unknown as {
+        lastOffset: number
+        getElementInfo(offset: number): {
+          latex?: string
+          bounds?: { left: number; top: number; right: number; bottom: number }
+        } | undefined
+      }
+      let left = Infinity
+      let top = Infinity
+      let right = -Infinity
+      let bottom = -Infinity
+      for (let offset = 0; offset <= mf.lastOffset; offset++) {
+        const info = mf.getElementInfo(offset)
+        if (!info?.latex?.startsWith('\\text') || info.latex === '\\mkern0mu' || !info.bounds) {
+          continue
+        }
+        left = Math.min(left, info.bounds.left)
+        top = Math.min(top, info.bounds.top)
+        right = Math.max(right, info.bounds.right)
+        bottom = Math.max(bottom, info.bounds.bottom)
+      }
+      return Number.isFinite(left) ? { left, top, right, bottom } : null
+    })
+
+  const highlightMatchesText = async () => {
+    const hl = await highlight.boundingBox()
+    const bounds = await visibleTextBounds()
+    return Boolean(
+      hl &&
+        bounds &&
+        Math.abs(hl.x - bounds.left) < 2 &&
+        Math.abs(hl.y - bounds.top) < 2 &&
+        Math.abs(hl.x + hl.width - bounds.right) < 2 &&
+        Math.abs(hl.y + hl.height - bounds.bottom) < 2,
+    )
+  }
+
+  await page.keyboard.type('M')
+  await expect(textarea).toHaveValue('\\text{M}', { timeout: 10000 })
+  await expect.poll(highlightMatchesText).toBe(true)
+
+  await page.keyboard.type('W')
+  await expect(textarea).toHaveValue('\\text{MW}', { timeout: 10000 })
+  await expect.poll(highlightMatchesText).toBe(true)
+  const widthBeforeDelete = (await highlight.boundingBox())!.width
+
+  await page.keyboard.press('Backspace')
+  await expect(textarea).toHaveValue('\\text{M}', { timeout: 10000 })
+  await expect.poll(highlightMatchesText).toBe(true)
+  const widthAfterDelete = (await highlight.boundingBox())!.width
+  expect(widthAfterDelete).toBeLessThan(widthBeforeDelete)
+
+  await page.keyboard.press('Backspace')
+  await expect(textarea).toHaveValue('\\text{}', { timeout: 10000 })
+  await expect(highlight).toHaveCount(0)
+})
+
+test('a Bold element behaves like a Text box with a styled hint and virtual caret', async ({
+  page,
+  goto,
+}) => {
+  await goto('/', { waitUntil: 'hydration' })
+  const textarea = page.locator('.latex-textarea')
+  const field = page.locator('math-field')
+  await expandCategory(page, 'Text')
+  await page.getByRole('button', { name: 'Insert Bold', exact: true }).click()
+  await expect(textarea).toHaveValue('\\bm{}', { timeout: 10000 })
+  await expect(field).toBeFocused()
+
+  const hint = page.locator('.text-hint').first()
+  await expect(hint).toBeVisible()
+  const font = await hint.evaluate((n) => {
+    const cs = getComputedStyle(n)
+    return { family: cs.fontFamily, weight: cs.fontWeight }
+  })
+  expect(font.family).toContain('KaTeX_Main')
+  expect(font.weight).toBe('700')
+  await expect(page.locator('.sim-caret')).toHaveCount(1)
+
+  await page.keyboard.type('ab')
+  await expect(textarea).toHaveValue('\\mathbf{ab}', { timeout: 10000 })
+  await expect(page.locator('.sim-caret')).toHaveCount(0)
+
+  await page.keyboard.press('Backspace')
+  await page.keyboard.press('Backspace')
+  await expect(textarea).toHaveValue('\\bm{}', { timeout: 10000 })
+  await expect(page.locator('.text-hint')).toHaveCount(1)
+  await expect(page.locator('.sim-caret')).toHaveCount(1)
+})
+
+test('dragging a font style twice toggles it off', async ({ page, goto }) => {
+  await goto('/', { waitUntil: 'hydration' })
+  const textarea = page.locator('.latex-textarea')
+  const field = page.locator('math-field')
+  await textarea.fill('\\text{hi}')
+  await textarea.blur()
+  await expect(textarea).toHaveValue('\\text{hi}')
+  await page.waitForTimeout(150)
+
+  const target = await field.evaluate((el) => {
+    const root = (el as HTMLElement & { shadowRoot: ShadowRoot }).shadowRoot
+    const r = root!.querySelector('.ML__text')!.getBoundingClientRect()
+    return { x: r.left + r.width / 2, y: r.top + r.height / 2 }
+  })
+
+  await dragStyleElement(page, 'mathbf', 'Insert Bold', target.x, target.y)
+  await expect(textarea).toHaveValue('\\textbf{hi}', { timeout: 10000 })
+
+  await dragStyleElement(page, 'mathbf', 'Insert Bold', target.x, target.y)
+  await expect(textarea).toHaveValue('\\text{hi}', { timeout: 10000 })
+})
+
+test('fraction numerator and denominator painted gaps are symmetric', async ({ page, goto }) => {
+  await goto('/', { waitUntil: 'hydration' })
+  const textarea = page.locator('.latex-textarea')
+  const field = page.locator('math-field')
+  await field.evaluate((el) => {
+    el.style.background = '#fff'
+    el.style.color = '#000'
+  })
+
+  for (const { size, latex } of [
+    { size: 16, latex: '\\frac{\\sin(a)}{\\cos(a)}' },
+    { size: 24, latex: '\\frac{\\sin(a)}{\\cos(a)}' },
+    { size: 32, latex: '\\frac{x}{y}' },
+    { size: 24, latex: '\\frac{\\frac{x}{y}}{z}' },
+  ]) {
+    await page.locator('.font-size-select').selectOption(String(size))
+    await textarea.fill(latex)
+    await textarea.blur()
+    await page.waitForTimeout(300)
+    const clip = await field.evaluate((el) => {
+      const rect = el.shadowRoot!.querySelector('.ML__latex')!.getBoundingClientRect()
+      return { x: rect.left - 4, y: rect.top - 4, width: rect.width + 8, height: rect.height + 8 }
+    })
+    const gaps = measurePaintedFractionGaps(await page.screenshot({ animations: 'disabled', clip }))
+    expect(Math.abs(gaps.top - gaps.bottom)).toBeLessThanOrEqual(1)
+    expect(gaps.top).toBeGreaterThan(0)
+    expect(gaps.bottom).toBeGreaterThan(0)
+  }
+})
+
+test('fraction rule stays positioned while focusing and typing', async ({ page, goto }) => {
+  await goto('/', { waitUntil: 'hydration' })
+  const textarea = page.locator('.latex-textarea')
+  const field = page.locator('math-field')
+  await textarea.fill('\\frac{\\sin(a)}{\\cos(a)}')
+  await textarea.blur()
+  await page.waitForTimeout(300)
+
+  await page.evaluate(() => {
+    const state = window as unknown as {
+      fractionFrameSamples: { top: number | null; transform: string | null }[]
+    }
+    state.fractionFrameSamples = []
+    let remaining = 36
+    const sample = () => {
+      const field = document.querySelector('math-field')!
+      const line = field.shadowRoot?.querySelector('.ML__frac-line') as HTMLElement | null
+      const row = line?.parentElement
+      const after = line ? getComputedStyle(line, '::after') : null
+      state.fractionFrameSamples.push({
+        top: line ? line.getBoundingClientRect().top + (parseFloat(after?.marginTop ?? '0') || 0) : null,
+        transform: row?.style.transform ?? null,
+      })
+      if (remaining-- > 0) requestAnimationFrame(sample)
+    }
+    requestAnimationFrame(sample)
+  })
+
+  await field.evaluate((element) => {
+    const mf = element as unknown as {
+      lastOffset: number
+      position: number
+      focus(): void
+      getElementInfo(offset: number): { latex?: string } | undefined
+    }
+    mf.focus()
+    for (let offset = 0; offset <= mf.lastOffset; offset++) {
+      const latex = mf.getElementInfo(offset)?.latex
+      if (latex === 'a' || latex?.endsWith('{a}')) {
+        mf.position = offset
+        break
+      }
+    }
+  })
+  await page.keyboard.type('bbb', { delay: 35 })
+  await page.waitForTimeout(700)
+
+  const samples = await page.evaluate(() => {
+    return (window as unknown as {
+      fractionFrameSamples: { top: number | null; transform: string | null }[]
+    }).fractionFrameSamples
+  })
+  expect(samples.length).toBeGreaterThan(20)
+  expect(samples.every((sample) => sample.top !== null && sample.transform?.startsWith('translateY('))).toBe(true)
+  const tops = samples.map((sample) => sample.top!).filter(Number.isFinite)
+  expect(Math.max(...tops) - Math.min(...tops)).toBeLessThan(0.5)
+})
+
+test('deleting a middle Text box keeps the caret at the deletion point', async ({ page, goto }) => {
+  await goto('/', { waitUntil: 'hydration' })
+  const textarea = page.locator('.latex-textarea')
+  const field = page.locator('math-field')
+  await textarea.fill('\\text{AAA}\\text{BBB}\\text{CCC}')
+  await textarea.blur()
+  await expect(textarea).toHaveValue('\\text{AAA}\\text{BBB}\\text{CCC}')
+  await page.waitForTimeout(150)
+
+  await field.evaluate((element) => {
+    const mf = element as unknown as {
+      lastOffset: number
+      position: number
+      focus(): void
+      getElementInfo(offset: number): { latex?: string } | undefined
+    }
+    mf.focus()
+    for (let offset = mf.lastOffset; offset >= 0; offset--) {
+      if (mf.getElementInfo(offset)?.latex?.endsWith('{B}')) {
+        mf.position = offset + 1
+        break
+      }
+    }
+  })
+  await expect(field).toBeFocused()
+
+  for (let i = 0; i < 3; i++) {
+    await page.keyboard.press('Backspace')
+  }
+  await expect(textarea).toHaveValue('\\text{AAACCC}', { timeout: 10000 })
+
+  const caret = await field.evaluate((element) => {
+    const mf = element as unknown as {
+      position: number
+      lastOffset: number
+      getElementInfo(offset: number): { latex?: string } | undefined
+    }
+    let junction = -1
+    for (let offset = 0; offset <= mf.lastOffset; offset++) {
+      if (mf.getElementInfo(offset)?.latex === '\\text{C}') {
+        junction = offset
+        break
+      }
+    }
+    return { position: mf.position, junction }
+  })
+  expect(caret.position).toBe(caret.junction - 1)
+  const latex = await textarea.inputValue()
+  expect(latex).not.toContain('mkern')
+  expect(latex).not.toContain('phantom')
+})
+
+test('typing into a box adjacent to another merges them', async ({ page, goto }) => {
+  await goto('/', { waitUntil: 'hydration' })
+  const textarea = page.locator('.latex-textarea')
+  const field = page.locator('math-field')
+  await textarea.fill('\\text{A}\\text{B}')
+  await textarea.blur()
+  await expect(textarea).toHaveValue('\\text{A}\\text{B}')
+  await page.waitForTimeout(150)
+
+  await field.evaluate((element) => {
+    const mf = element as unknown as {
+      lastOffset: number
+      position: number
+      focus(): void
+      getElementInfo(offset: number): { latex?: string } | undefined
+    }
+    mf.focus()
+    for (let offset = 0; offset <= mf.lastOffset; offset++) {
+      if (mf.getElementInfo(offset)?.latex === '\\text{A}') {
+        mf.position = offset + 1
+        break
+      }
+    }
+  })
+  await expect(field).toBeFocused()
+  await page.keyboard.type('x')
+  await expect(textarea).toHaveValue('\\text{AxB}', { timeout: 10000 })
+
+  const caret = await field.evaluate((element) => {
+    const mf = element as unknown as {
+      position: number
+      lastOffset: number
+      getElementInfo(offset: number): { latex?: string } | undefined
+    }
+    let afterX = -1
+    for (let offset = 0; offset <= mf.lastOffset; offset++) {
+      if (mf.getElementInfo(offset)?.latex === '\\text{x}') {
+        afterX = offset
+      }
+    }
+    return { position: mf.position, afterX }
+  })
+  expect(caret.position).toBe(caret.afterX)
+})
+
+test('typing keeps the caret right after each letter', async ({ page, goto }) => {
+  await goto('/', { waitUntil: 'hydration' })
+  const textarea = page.locator('.latex-textarea')
+  const field = page.locator('math-field')
+  await expandCategory(page, 'Text')
+  await page.getByRole('button', { name: 'Insert Text', exact: true }).click()
+  await expect(textarea).toHaveValue('\\text{}', { timeout: 10000 })
+  await expect(field).toBeFocused()
+  await page.waitForTimeout(200)
+
+  for (const ch of 'hel') {
+    await page.keyboard.type(ch)
+    await expect
+      .poll(async () =>
+        field.evaluate(
+          (element, letter) => {
+            const mf = element as unknown as {
+              position: number
+              lastOffset: number
+              getElementInfo(offset: number): { latex?: string } | undefined
+            }
+          let after = -1
+          for (let offset = 0; offset <= mf.lastOffset; offset++) {
+            if (mf.getElementInfo(offset)?.latex === `\\text{${letter}}`) {
+              after = offset
+            }
+          }
+          return mf.position === after
+          },
+          ch,
+        ),
+      )
+      .toBe(true)
+  }
+  await expect(textarea).toHaveValue('\\text{hel}', { timeout: 10000 })
+})
+
+test('the Text drag preview shows the gray word and pushes the content apart', async ({
+  page,
+  goto,
+}) => {
+  await goto('/', { waitUntil: 'hydration' })
+  const textarea = page.locator('.latex-textarea')
+  await textarea.fill('12')
+  await textarea.blur()
+  await expect(textarea).toHaveValue('12')
+
+  const workspace = page.locator('.workspace')
+  const box = await workspace.boundingBox()
+  await page.evaluate(() => {
+    document
+      .querySelector('button[aria-label="Insert Text"]')!
+      .dispatchEvent(new DragEvent('dragstart', { bubbles: true, cancelable: true, dataTransfer: new DataTransfer() }))
+  })
+  await page.evaluate(
+    ([x, y]) => {
+      document
+        .querySelector('.workspace')!
+        .dispatchEvent(
+          new DragEvent('dragover', {
+            bubbles: true,
+            cancelable: true,
+            clientX: x,
+            clientY: y,
+            dataTransfer: new DataTransfer(),
+          }),
+        )
+    },
+    [box!.x + box!.width / 2, box!.y + box!.height / 2],
+  )
+
+  const mirrorValue = () =>
+    page.evaluate(
+      () => (document.querySelector('math-field.workspace-mirror') as unknown as { value: string })?.value,
+    )
+  await expect.poll(mirrorValue).toContain('\\text{Text}')
+  await expect.poll(mirrorValue).not.toContain('phantom')
+
+  await page.evaluate(() => {
+    document
+      .querySelector('button[aria-label="Insert Text"]')!
+      .dispatchEvent(new DragEvent('dragend', { bubbles: true, cancelable: true, dataTransfer: new DataTransfer() }))
+  })
+})
+
+test('select all delete and replace clear the field without escaping markers', async ({
+  page,
+  goto,
+}) => {
+  await goto('/', { waitUntil: 'hydration' })
+  const textarea = page.locator('.latex-textarea')
+  const field = page.locator('math-field')
+  const selectAll = () =>
+    field.evaluate((element) => {
+      const mf = element as unknown as { focus(): void; executeCommand(cmd: string): boolean }
+      mf.focus()
+      mf.executeCommand('selectAll')
+    })
+
+  await textarea.fill('\\text{abc}x')
+  await textarea.blur()
+  await expect(textarea).toHaveValue('\\text{abc}x')
+  await selectAll()
+  await expect(field).toBeFocused()
+  await page.keyboard.press('Delete')
+  await expect(textarea).toHaveValue('', { timeout: 10000 })
+
+  await textarea.fill('\\text{abc}x')
+  await textarea.blur()
+  await selectAll()
+  await expect(field).toBeFocused()
+  await page.keyboard.type('y')
+  await expect(textarea).toHaveValue('y', { timeout: 10000 })
+})
+
+test('deleting the last character of a styled Text box keeps its style', async ({
+  page,
+  goto,
+}) => {
+  await goto('/', { waitUntil: 'hydration' })
+  const textarea = page.locator('.latex-textarea')
+  const field = page.locator('math-field')
+  await textarea.fill('\\textbf{a}')
+  await textarea.blur()
+  await expect(textarea).toHaveValue('\\textbf{a}')
+
+  await field.evaluate((element) => {
+    const mf = element as unknown as { lastOffset: number; position: number; focus(): void }
+    mf.focus()
+    mf.position = mf.lastOffset
+  })
+  await expect(field).toBeFocused()
+  await page.keyboard.press('Backspace')
+  await expect(textarea).toHaveValue('\\textbf{}', { timeout: 10000 })
+  const latex = await textarea.inputValue()
+  expect(latex).not.toContain('mkern')
+
+  await textarea.fill('\\textbf{a}')
+  await textarea.blur()
+  await field.evaluate((element) => {
+    const mf = element as unknown as {
+      lastOffset: number
+      position: number
+      focus(): void
+      getElementInfo(offset: number): { latex?: string } | undefined
+    }
+    mf.focus()
+    for (let offset = 0; offset <= mf.lastOffset; offset++) {
+      if (mf.getElementInfo(offset)?.latex?.endsWith('{a}')) {
+        mf.position = offset
+        break
+      }
+    }
+  })
+  await expect(field).toBeFocused()
+  await page.keyboard.press('Delete')
+  await expect(textarea).toHaveValue('\\textbf{}', { timeout: 10000 })
 })
 
 test('search narrows the palette', async ({ page, goto }) => {
@@ -41,6 +1167,13 @@ test('palette scrolls independently at a short viewport', async ({ page, goto })
   await goto('/', { waitUntil: 'hydration' })
   const scroll = page.locator('.palette-scroll')
   await expect(scroll).toBeVisible()
+  const headings = page.locator('button.palette-heading')
+  const headingCount = await headings.count()
+  for (let i = 0; i < headingCount; i++) {
+    if ((await headings.nth(i).getAttribute('aria-expanded')) !== 'true') {
+      await headings.nth(i).click()
+    }
+  }
   const canScroll = await scroll.evaluate((el) => el.scrollHeight > el.clientHeight)
   expect(canScroll).toBe(true)
   await scroll.evaluate((el) => {
@@ -56,12 +1189,14 @@ test('drags a fraction from the palette into the equation', async ({ page, goto 
   await expect(page.locator('math-field')).toBeVisible()
   const source = page.getByRole('button', { name: 'Insert Fraction' })
   const target = page.locator('.workspace-paper')
+  await expandCategory(page, 'Fractions')
   await source.dragTo(target)
   await expect(page.locator('.latex-textarea')).toHaveValue(/\\frac/, { timeout: 10000 })
 })
 
 test('palette icons render with mathlive markup layout', async ({ page, goto }) => {
   await goto('/', { waitUntil: 'hydration' })
+  await expandCategory(page, 'Fractions')
   await expect(page.locator('.palette-item .ML__mfrac').first()).toBeVisible({ timeout: 15000 })
 })
 
@@ -70,7 +1205,7 @@ test('typing replaces the selected placeholder after inserting an accent element
   goto,
 }) => {
   await goto('/', { waitUntil: 'hydration' })
-  await page.getByRole('button', { name: 'Insert Bar' }).click()
+  await insertElement(page, 'Bar', 'Accents')
   const textarea = page.locator('.latex-textarea')
   await expect(textarea).toHaveValue(/\\bar/, { timeout: 10000 })
   await page.keyboard.type('x')
@@ -79,7 +1214,7 @@ test('typing replaces the selected placeholder after inserting an accent element
 
 test('clicking an accent placeholder focuses it and accepts input', async ({ page, goto }) => {
   await goto('/', { waitUntil: 'hydration' })
-  await page.getByRole('button', { name: 'Insert Bar' }).click()
+  await insertElement(page, 'Bar', 'Accents')
   const textarea = page.locator('.latex-textarea')
   await expect(textarea).toHaveValue(/\\bar/, { timeout: 10000 })
   await page.keyboard.press('ArrowLeft')
@@ -97,6 +1232,7 @@ test('clicking an accent placeholder focuses it and accepts input', async ({ pag
 
 test('palette ellipsis icon renders the symbol without errors', async ({ page, goto }) => {
   await goto('/', { waitUntil: 'hydration' })
+  await expandCategory(page, 'Basic')
   const chip = page.getByRole('button', { name: 'Insert Ellipsis' })
   await expect(chip).toContainText('…', { timeout: 15000 })
   await expect(chip.locator('.ML__error')).toHaveCount(0)
@@ -169,7 +1305,7 @@ test('dragging onto a placeholder replaces it in the preview and reverts on leav
   goto,
 }) => {
   await goto('/', { waitUntil: 'hydration' })
-  await page.getByRole('button', { name: 'Insert Square root' }).click()
+  await insertElement(page, 'Square root', 'Roots')
   const textarea = page.locator('.latex-textarea')
   await expect(textarea).toHaveValue(/\\sqrt/, { timeout: 10000 })
   await page.waitForTimeout(100)
@@ -223,7 +1359,7 @@ test('dragging onto a placeholder replaces it in the preview and reverts on leav
 
 test('dropping onto the sum subscript replaces it', async ({ page, goto }) => {
   await goto('/', { waitUntil: 'hydration' })
-  await page.getByRole('button', { name: 'Insert Sum' }).click()
+  await insertElement(page, 'Sum', 'Sums & Integrals')
   const textarea = page.locator('.latex-textarea')
   await expect(textarea).toHaveValue(/\\sum/, { timeout: 10000 })
   await page.waitForTimeout(100)
@@ -289,7 +1425,7 @@ test('dropping onto the sum subscript replaces it', async ({ page, goto }) => {
 
 test('deleting a group content restores a focused placeholder', async ({ page, goto }) => {
   await goto('/', { waitUntil: 'hydration' })
-  await page.getByRole('button', { name: 'Insert Square root' }).click()
+  await insertElement(page, 'Square root', 'Roots')
   const textarea = page.locator('.latex-textarea')
   await expect(textarea).toHaveValue(/\\sqrt/, { timeout: 10000 })
   await page.waitForTimeout(50)
@@ -299,7 +1435,7 @@ test('deleting a group content restores a focused placeholder', async ({ page, g
   for (let i = 0; i < 3; i++) {
     await page.keyboard.press('Backspace')
   }
-  await expect(textarea).toHaveValue(/\\sqrt\{\\placeholder\{\}\}/, { timeout: 10000 })
+  await expect(textarea).toHaveValue(/\\sqrt\{\}/, { timeout: 10000 })
 
   // the restored placeholder is focused: typing fills it
   await page.keyboard.type('z')
@@ -308,7 +1444,7 @@ test('deleting a group content restores a focused placeholder', async ({ page, g
 
 test('backspace removes an element when only its placeholder remains', async ({ page, goto }) => {
   await goto('/', { waitUntil: 'hydration' })
-  await page.getByRole('button', { name: 'Insert Square root' }).click()
+  await insertElement(page, 'Square root', 'Roots')
   const textarea = page.locator('.latex-textarea')
   await expect(textarea).toHaveValue(/\\sqrt/, { timeout: 10000 })
   await page.waitForTimeout(50)
@@ -318,7 +1454,7 @@ test('backspace removes an element when only its placeholder remains', async ({ 
 
 test('backspace removes a sum when only its placeholders remain', async ({ page, goto }) => {
   await goto('/', { waitUntil: 'hydration' })
-  await page.getByRole('button', { name: 'Insert Sum' }).click()
+  await insertElement(page, 'Sum', 'Sums & Integrals')
   const textarea = page.locator('.latex-textarea')
   await expect(textarea).toHaveValue(/\\sum/, { timeout: 10000 })
   await page.waitForTimeout(50)
@@ -328,7 +1464,7 @@ test('backspace removes a sum when only its placeholders remain', async ({ page,
 
 test('backspace removes an integral when only its placeholders remain', async ({ page, goto }) => {
   await goto('/', { waitUntil: 'hydration' })
-  await page.getByRole('button', { name: 'Insert Integral' }).click()
+  await insertElement(page, 'Integral', 'Sums & Integrals')
   const textarea = page.locator('.latex-textarea')
   await expect(textarea).toHaveValue(/\\int/, { timeout: 10000 })
   await page.waitForTimeout(50)
@@ -378,7 +1514,7 @@ test('drag preview keeps the insertion point near the target atom', async ({ pag
 
 test('clear resets the editor, source, preview and export', async ({ page, goto }) => {
   await goto('/', { waitUntil: 'hydration' })
-  await page.getByRole('button', { name: 'Insert Fraction' }).click()
+  await insertElement(page, 'Fraction', 'Fractions')
   await expect(page.locator('.latex-textarea')).toHaveValue(/\\frac/)
   await page.getByRole('button', { name: 'Clear', exact: true }).click()
   await expect(page.locator('.latex-textarea')).toHaveValue('')
@@ -465,14 +1601,14 @@ test('drag hint does not shift the workspace layout', async ({ page, goto }) => 
 
 test('backspace unwrapping a sum inside a root restores the root placeholder', async ({ page, goto }) => {
   await goto('/', { waitUntil: 'hydration' })
-  await page.getByRole('button', { name: 'Insert Square root' }).click()
+  await insertElement(page, 'Square root', 'Roots')
   const textarea = page.locator('.latex-textarea')
   await expect(textarea).toHaveValue(/\\sqrt/, { timeout: 10000 })
-  await page.getByRole('button', { name: 'Insert Sum' }).click()
+  await insertElement(page, 'Sum', 'Sums & Integrals')
   await expect(textarea).toHaveValue(/\\sum/, { timeout: 10000 })
   await expect(page.locator('math-field')).toBeFocused()
   await page.keyboard.press('Backspace')
-  await expect(textarea).toHaveValue(/\\sqrt\{\\placeholder\{\}\}/, { timeout: 10000 })
+  await expect(textarea).toHaveValue(/\\sqrt\{\}/, { timeout: 10000 })
 
   // the restored placeholder is focused: typing fills it
   await page.keyboard.type('z')
@@ -481,22 +1617,22 @@ test('backspace unwrapping a sum inside a root restores the root placeholder', a
 
 test('unwrapping a nested fraction restores the parent operator placeholder', async ({ page, goto }) => {
   await goto('/', { waitUntil: 'hydration' })
-  await page.getByRole('button', { name: 'Insert Sum' }).click()
+  await insertElement(page, 'Sum', 'Sums & Integrals')
   const textarea = page.locator('.latex-textarea')
   await expect(textarea).toHaveValue(/\\sum/, { timeout: 10000 })
-  await page.getByRole('button', { name: 'Insert Fraction' }).click()
+  await insertElement(page, 'Fraction', 'Fractions')
   await expect(textarea).toHaveValue(/\\frac/, { timeout: 10000 })
   await expect(page.locator('math-field')).toBeFocused()
   await page.keyboard.press('Backspace')
   await expect(textarea).toHaveValue(
-    /\\sum_\{\\placeholder\{\}\}\^\{?\\placeholder\{\}\}?/,
+    /\\sum_\{\}\^\{?\}?/,
     { timeout: 10000 },
   )
 })
 
 test('backspace after dropping a sum onto the root placeholder restores it', async ({ page, goto }) => {
   await goto('/', { waitUntil: 'hydration' })
-  await page.getByRole('button', { name: 'Insert Square root' }).click()
+  await insertElement(page, 'Square root', 'Roots')
   const textarea = page.locator('.latex-textarea')
   await expect(textarea).toHaveValue(/\\sqrt/, { timeout: 10000 })
   await page.waitForTimeout(100)
@@ -533,5 +1669,5 @@ test('backspace after dropping a sum onto the root placeholder restores it', asy
   await expect(page.locator('math-field')).toBeFocused()
 
   await page.keyboard.press('Backspace')
-  await expect(textarea).toHaveValue(/\\sqrt\{\\placeholder\{\}\}/, { timeout: 10000 })
+  await expect(textarea).toHaveValue(/\\sqrt\{\}/, { timeout: 10000 })
 })

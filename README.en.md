@@ -13,12 +13,21 @@ A drag-and-drop LaTeX equation editor desktop app. Drag equation elements from t
 
 </div>
 
+## Disclaimer
+This project is completely developed by AI, aiming to test AI's ability in developing project.
+
+Main: DeepSeek V4 Pro  
+Total used token: 925,651,744   
+Cache Hit: 903,746,304  
+Cache Miss: 18,103,078  
+Output: 3,802,362
+
+Assistance: ChatGPT 5.6 Sol
+
 ## Features
 
 - **Drag-and-drop editing**: 200+ equation elements (operators, functions, fractions, roots, sums/integrals, Greek letters, logic/set symbols, arrows, scripts, matrices, and more), insertable by click or drag.
 - **Live preview**: WYSIWYG rendering via MathJax, matching the export output.
-- **Placeholders**: templates like `\frac{⬚}{⬚}` insert with placeholders you can click to fill; deleting a group's content restores the placeholder and focuses it automatically.
-- **Insertion preview**: while dragging, a live preview of the resulting equation is shown at the caret position (the inserted element is highlighted in grey).
 - **LaTeX source**: view/edit the source, copy (raw / inline / display), and import/export `.tex` files.
 - **Export**: SVG, PNG, JPEG, WebP, PDF (background color, padding, resolution, JPEG quality, display style).
 - **Desktop**: built with Tauri; file dialogs and image/PDF rendering happen in Rust, with no browser sandbox limits.
@@ -31,7 +40,7 @@ A drag-and-drop LaTeX equation editor desktop app. Drag equation elements from t
 
 ## Prerequisites
 
-- Node.js ≥ 20
+- Node.js ≥ 22
 - Rust stable (with `rustfmt` and `clippy`, see `src-tauri/rust-toolchain.toml`)
 - Platform dependencies:
   - **macOS**: Xcode Command Line Tools

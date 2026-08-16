@@ -60,6 +60,10 @@ class FakeMathField extends HTMLElement {
     this.value = value
   }
 
+  getValue() {
+    return this.value
+  }
+
   applyStyle(style: Record<string, unknown>, options?: Record<string, unknown>) {
     this.stylesApplied.push({ style, range: options?.range })
   }

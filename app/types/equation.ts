@@ -6,6 +6,7 @@ export type ElementCategory =
   | 'delimiters'
   | 'large-ops'
   | 'functions'
+  | 'text'
   | 'greek'
   | 'logic'
   | 'sets'
@@ -30,6 +31,7 @@ export const ELEMENT_CATEGORY_LABELS: Record<ElementCategory, string> = {
   delimiters: 'Brackets',
   'large-ops': 'Sums & Integrals',
   functions: 'Functions',
+  text: 'Text',
   greek: 'Greek Letters',
   logic: 'Logic',
   sets: 'Sets',
@@ -46,6 +48,7 @@ export const ELEMENT_CATEGORY_ORDER: ElementCategory[] = [
   'delimiters',
   'large-ops',
   'functions',
+  'text',
   'greek',
   'logic',
   'sets',

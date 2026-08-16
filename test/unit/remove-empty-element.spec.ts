@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { removeElementAtPlaceholder } from '../../app/utils/remove-empty-element'
+import { removeElementAtPlaceholder } from '~/utils/remove-empty-element'
 
 const OPEN_LEN = '\\placeholder{'.length
 
@@ -141,8 +141,11 @@ describe('removeElementAtPlaceholder', () => {
     expect(remove('\\lim_{\\placeholder{} \\to \\placeholder{}}')).toEqual({ latex: '', caretOffset: 0 })
   })
 
-  it('removes the whole n-th root when the index placeholder is deleted', () => {
-    expect(remove('\\sqrt[\\placeholder{}]{\\placeholder{}}')).toEqual({ latex: '', caretOffset: 0 })
+  it('drops the index and keeps the radicand when the index placeholder is deleted', () => {
+    expect(remove('\\sqrt[\\placeholder{}]{\\placeholder{}}')).toEqual({
+      latex: '\\sqrt{\\placeholder{}}',
+      caretOffset: 5,
+    })
   })
 
   it('drops only the index when the n-th root radicand has content', () => {

@@ -118,6 +118,19 @@ export const EQUATION_ELEMENTS: EquationElement[] = [
   item('log', 'Logarithm', 'functions', '\\log_{#0}(#?)', `\\log_{${SQUARE}}(${SQUARE})`),
   item('exp', 'Exponential', 'functions', '\\exp(#0)', `\\exp(${SQUARE})`),
 
+  // Text
+  item('text', 'Text', 'text', '\\text{#0}', '\\text{Text}', ['label', 'words']),
+
+  // Text styles
+  item('mathrm', 'Upright', 'text', '\\mathrm{#0}', '\\mathrm{Text}'),
+  item('mathbf', 'Bold', 'text', '\\mathbf{#0}', '\\mathbf{Text}'),
+  item('mathit', 'Italic', 'text', '\\mathit{#0}', '\\mathit{Text}'),
+  item('mathsf', 'Sans-serif', 'text', '\\mathsf{#0}', '\\mathsf{Text}'),
+  item('mathtt', 'Typewriter', 'text', '\\mathtt{#0}', '\\mathtt{Text}'),
+  item('mathcal', 'Calligraphic', 'text', '\\mathcal{#0}', '\\mathcal{Text}'),
+  item('mathbb', 'Blackboard bold', 'text', '\\mathbb{#0}', '\\mathbb{Text}'),
+  item('mathfrak', 'Fraktur', 'text', '\\mathfrak{#0}', '\\mathfrak{Text}'),
+
   // Greek letters
   item('alpha', 'Alpha', 'greek', '\\alpha', '\\alpha'),
   item('beta', 'Beta', 'greek', '\\beta', '\\beta'),
@@ -228,8 +241,6 @@ export const EQUATION_ELEMENTS: EquationElement[] = [
   item('overleftarrow', 'Left vector arrow', 'accents', '\\overleftarrow{#0}', `\\overleftarrow{${SQUARE}}`),
   item('overbrace', 'Overbrace', 'accents', '\\overbrace{#0}^{#?}', `\\overbrace{${SQUARE}}^{${SQUARE}}`),
   item('underbrace', 'Underbrace', 'accents', '\\underbrace{#0}_{#?}', `\\underbrace{${SQUARE}}_{${SQUARE}}`),
-  item('mathbf', 'Bold', 'accents', '\\mathbf{#0}', `\\mathbf{${SQUARE}}`),
-  item('mathrm', 'Upright', 'accents', '\\mathrm{#0}', `\\mathrm{${SQUARE}}`),
 
   // Matrices
   item(

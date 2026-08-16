@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { restoreEmptyGroupLatex } from '../../app/utils/empty-group'
+import { restoreEmptyGroupLatex } from '~/utils/empty-group'
 
 describe('restoreEmptyGroupLatex', () => {
   it('restores a placeholder into an empty sqrt', () => {
@@ -29,6 +29,18 @@ describe('restoreEmptyGroupLatex', () => {
     expect(restoreEmptyGroupLatex('x_{}')).toBe('x_{\\placeholder{}}')
   })
 
+  it('restores empty text boxes with the phantom sentinel, not a placeholder', () => {
+    expect(restoreEmptyGroupLatex('\\text{}')).toBe('\\text{\\phantom{Text}}')
+    expect(restoreEmptyGroupLatex('\\textbf{}')).toBe('\\textbf{\\phantom{Text}}')
+    expect(restoreEmptyGroupLatex('\\textit{}')).toBe('\\textit{\\phantom{Text}}')
+  })
+
+  it('restores empty math-font boxes with the text-mode phantom sentinel', () => {
+    expect(restoreEmptyGroupLatex('\\mathbf{}')).toBe('\\mathbf{\\phantom{\\text{Text}}}')
+    expect(restoreEmptyGroupLatex('\\mathrm{}')).toBe('\\mathrm{\\phantom{\\text{Text}}}')
+    expect(restoreEmptyGroupLatex('\\mathcal{}')).toBe('\\mathcal{\\phantom{\\text{Text}}}')
+  })
+
   it('restores an operator script left empty by an unwrapped element', () => {
     expect(restoreEmptyGroupLatex('\\sum_{\\placeholder{}}^{}')).toBe(
       '\\sum_{\\placeholder{}}^{\\placeholder{}}',
@@ -56,6 +68,8 @@ describe('restoreEmptyGroupLatex', () => {
     expect(restoreEmptyGroupLatex('\\sqrt{\\placeholder{}}')).toBeNull()
     expect(restoreEmptyGroupLatex('\\frac{a}{b}')).toBeNull()
     expect(restoreEmptyGroupLatex('x+1')).toBeNull()
+    expect(restoreEmptyGroupLatex('\\text{x}')).toBeNull()
+    expect(restoreEmptyGroupLatex('\\text{\\phantom{Text}}')).toBeNull()
   })
 
   it('does not nest placeholders inside placeholders', () => {

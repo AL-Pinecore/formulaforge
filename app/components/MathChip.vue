@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { nextTick, onMounted, ref, watch } from 'vue'
+import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 
 const props = defineProps<{ latex: string }>()
 
@@ -9,6 +9,8 @@ const innerEl = ref<HTMLSpanElement | null>(null)
 
 const MAX_WIDTH = 44
 const MAX_HEIGHT = 38
+
+let resizeObserver: ResizeObserver | null = null
 
 function escapeHtml(value: string): string {
   return value
@@ -48,6 +50,20 @@ function fitToBox() {
 
 onMounted(() => {
   void render()
+  // Re-measure when the chip becomes visible (e.g. its palette category is
+  // expanded) or its rendered content changes size. A collapsed category hides
+  // the chip with `display:none`, so `scrollWidth`/`scrollHeight` read 0 at
+  // mount and the scale would otherwise stay stuck at 1.
+  const el = innerEl.value
+  if (el && typeof ResizeObserver !== 'undefined') {
+    resizeObserver = new ResizeObserver(() => fitToBox())
+    resizeObserver.observe(el)
+  }
+})
+
+onBeforeUnmount(() => {
+  resizeObserver?.disconnect()
+  resizeObserver = null
 })
 
 watch(
