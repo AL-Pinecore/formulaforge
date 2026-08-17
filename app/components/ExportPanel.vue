@@ -3,10 +3,13 @@ import { computed, reactive, ref } from 'vue'
 import { DEFAULT_EXPORT_SETTINGS } from '~/types/export'
 import type { ExportFormat, ExportSettings } from '~/types/export'
 import { useEquationExport } from '~/composables/useEquationExport'
+import { useI18n } from '~/composables/useI18n'
 
 const props = defineProps<{ latex: string }>()
 
 const emit = defineEmits<{ toast: [message: string, kind: 'success' | 'error'] }>()
+
+const { t } = useI18n()
 
 const settings = reactive<ExportSettings>({ ...DEFAULT_EXPORT_SETTINGS })
 const { exporting, lastError, exportEquation, formats, formatLabels } = useEquationExport()
@@ -54,18 +57,18 @@ const backgroundEnabled = computed({
 
 const scaleLabel = computed(() => {
   if (settings.scale >= 3) {
-    return '3× (high DPI)'
+    return t('export.scaleHigh')
   }
   if (settings.scale >= 2) {
-    return '2×'
+    return t('export.scale2')
   }
-  return '1×'
+  return t('export.scale1')
 })
 
 async function onExport() {
   const ok = await exportEquation(props.latex, effectiveSettings.value)
   if (ok) {
-    emit('toast', `Exported ${formatLabels[settings.format]}`, 'success')
+    emit('toast', t('toast.exported', { format: formatLabels[settings.format] }), 'success')
   } else if (lastError.value) {
     emit('toast', lastError.value, 'error')
   }
@@ -75,12 +78,12 @@ async function onExport() {
 <template>
   <section class="export-panel">
     <div class="panel-header">
-      <h2 class="panel-title">Export</h2>
+      <h2 class="panel-title">{{ t('export.title') }}</h2>
     </div>
 
     <div class="field">
-      <span class="field-label">Format</span>
-      <div class="format-row" role="radiogroup" aria-label="Export format">
+      <span class="field-label">{{ t('export.format') }}</span>
+      <div class="format-row" role="radiogroup" :aria-label="t('export.format')">
         <button
           v-for="format in formats"
           :key="format"
@@ -100,9 +103,9 @@ async function onExport() {
     </div>
 
     <div class="field">
-      <span class="field-label">Ink color</span>
+      <span class="field-label">{{ t('export.inkColor') }}</span>
       <div class="row">
-        <input v-model="settings.color" type="color" class="color-input" aria-label="Ink color" />
+        <input v-model="settings.color" type="color" class="color-input" :aria-label="t('export.inkColor')" />
         <code class="color-value">{{ settings.color }}</code>
       </div>
     </div>
@@ -110,38 +113,38 @@ async function onExport() {
     <div class="field">
       <label class="checkbox-row">
         <input v-model="backgroundEnabled" type="checkbox" :disabled="settings.format === 'jpeg'" />
-        <span>Background color (JPEG always uses one)</span>
+        <span>{{ t('export.backgroundColor') }}</span>
       </label>
       <div v-if="backgroundEnabled || settings.format === 'jpeg'" class="row" style="margin-top: 6px">
         <input
           v-model="settings.background"
           type="color"
           class="color-input"
-          aria-label="Background color"
+          :aria-label="t('export.backgroundLabel')"
         />
         <code class="color-value">{{ settings.background }}</code>
       </div>
     </div>
 
     <div class="field">
-      <span class="field-label">Padding (px)</span>
+      <span class="field-label">{{ t('export.padding') }}</span>
       <input
         v-model.number="settings.padding"
         type="number"
         min="0"
         max="200"
         class="text-input"
-        aria-label="Padding in pixels"
+        :aria-label="t('export.padding')"
       />
     </div>
 
     <div class="field">
-      <span class="field-label">Resolution — {{ scaleLabel }}</span>
-      <input v-model.number="settings.scale" type="range" min="1" max="3" step="1" class="range-input" aria-label="Resolution scale" />
+      <span class="field-label">{{ t('export.resolution') }} — {{ scaleLabel }}</span>
+      <input v-model.number="settings.scale" type="range" min="1" max="3" step="1" class="range-input" :aria-label="t('export.resolution')" />
     </div>
 
     <div v-if="settings.format === 'jpeg'" class="field">
-      <span class="field-label">JPEG quality — {{ settings.jpegQuality }}</span>
+      <span class="field-label">{{ t('export.jpegQuality') }} — {{ settings.jpegQuality }}</span>
       <input
         v-model.number="settings.jpegQuality"
         type="range"
@@ -149,14 +152,14 @@ async function onExport() {
         max="100"
         step="1"
         class="range-input"
-        aria-label="JPEG quality"
+        :aria-label="t('export.jpegQuality')"
       />
     </div>
 
     <div class="field">
       <label class="checkbox-row">
         <input v-model="settings.displayStyle" type="checkbox" />
-        <span>Display style (limits above and below)</span>
+        <span>{{ t('export.displayStyle') }}</span>
       </label>
     </div>
 
@@ -172,9 +175,9 @@ async function onExport() {
       @merror="previewHasErrors = $event"
     />
     <p v-if="previewHasErrors" class="hint hint-warn">
-      The expression contains LaTeX errors — export may not reflect what you expect.
+      {{ t('export.previewHasErrors') }}
     </p>
-    <p v-else-if="previewError" class="hint hint-warn">Could not render a preview of this expression.</p>
+    <p v-else-if="previewError" class="hint hint-warn">{{ t('export.previewError') }}</p>
 
     <button
       type="button"
@@ -182,7 +185,7 @@ async function onExport() {
       :disabled="exporting || !latex.trim()"
       @click="onExport"
     >
-      {{ exporting ? 'Exporting…' : 'Export equation' }}
+      {{ exporting ? t('export.exporting') : t('export.exportEquation') }}
     </button>
   </section>
 </template>

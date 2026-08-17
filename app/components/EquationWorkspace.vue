@@ -24,6 +24,7 @@ import {
   withEmptyTextSentinel,
 } from '~/utils/text-boundary'
 import type { EquationElement } from '~/types/equation'
+import { useI18n } from '~/composables/useI18n'
 
 const props = defineProps<{ fontSize: number }>()
 
@@ -32,6 +33,8 @@ const emit = defineEmits<{
   'undo-state': [canUndo: boolean, canRedo: boolean]
   toast: [message: string, kind: 'success' | 'error']
 }>()
+
+const { t } = useI18n()
 
 const PREVIEW_GREY = '#9ca3af'
 const PLACEHOLDER_GLYPH = '▢'
@@ -70,6 +73,10 @@ let dragPlaceholderIndex = -1
 let dragApplyFont = false
 let dragX = -1
 let dragY = -1
+let imeComposing = false
+let imeSuppressed = false
+let imeEmptyTextCompose = false
+let imeCompositionData = ''
 
 // MathLive's getOffsetFromPoint is unreliable with sub/superscripts and groups:
 // it returns 0 (the start of the formula) for many positions, which makes the
@@ -917,7 +924,7 @@ function isAcceptedTextFile(file: File): boolean {
 }
 
 function configureMathfield(mf: MathfieldElement) {
-  mf.placeholder = 'Type LaTeX or Drag Elements Here…'
+  mf.placeholder = t('workspace.placeholder')
   mf.mathVirtualKeyboardPolicy = 'manual'
   mf.style.fontSize = `${props.fontSize}px`
   const normalized = addTextBoundaries(mf.value)
@@ -1181,7 +1188,7 @@ function onDrop(event: DragEvent) {
   const file = dataTransfer?.files?.[0]
   if (file) {
     if (!isAcceptedTextFile(file)) {
-      emit('toast', 'Only text files (.tex, .txt) can be loaded.', 'error')
+      emit('toast', t('toast.onlyTextFiles'), 'error')
       return
     }
     file
@@ -1195,9 +1202,9 @@ function onDrop(event: DragEvent) {
           mf.setValue(addTextBoundaries(contents), { mode: 'math', silenceNotifications: true })
         }
         publishState(mf)
-        emit('toast', `Loaded ${file.name}`, 'success')
+        emit('toast', t('toast.loadedFile', { file: file.name }), 'success')
       })
-      .catch(() => emit('toast', 'Could not read the dropped file.', 'error'))
+      .catch(() => emit('toast', t('toast.couldNotRead'), 'error'))
     return
   }
 
@@ -1229,7 +1236,7 @@ async function insertElement(
 ) {
   const mf = await ensureMathfield()
   if (!mf) {
-    emit('toast', 'The equation editor is not ready yet.', 'error')
+    emit('toast', t('toast.notReady'), 'error')
     return
   }
   if (
@@ -1299,7 +1306,7 @@ async function insertElement(
 async function insertLatex(text: string, targetOffset?: number) {
   const mf = await ensureMathfield()
   if (!mf) {
-    emit('toast', 'The equation editor is not ready yet.', 'error')
+    emit('toast', t('toast.notReady'), 'error')
     return
   }
   if (targetOffset != null && Number.isInteger(targetOffset) && targetOffset >= 0) {
@@ -1475,6 +1482,13 @@ let caretArrivedByNavigation = false
 let lastArrowDirection: 'left' | 'right' | null = null
 
 function onMfKeydown(event: KeyboardEvent) {
+  // During IME composition the browser emits keydown events that carry the
+  // composition state (`isComposing`, `key === 'Process'` or `keyCode 229`).
+  // MathLive handles the composition natively; intercepting these keys here
+  // would rebuild `\text{...}` groups mid-composition and corrupt the input.
+  if (event.isComposing || event.key === 'Process' || event.keyCode === 229) {
+    return
+  }
   const isArrowKey = event.key === 'ArrowLeft' || event.key === 'ArrowRight'
   const isModifierKey =
     event.key === 'Shift' ||
@@ -1498,6 +1512,101 @@ function onMfKeydown(event: KeyboardEvent) {
       caretArrivedByNavigation = false
     }
   }
+}
+
+// IME composition starts on MathLive's contenteditable keyboard sink (inside
+// its shadow DOM) and bubbles to the host as a composed event. We intercept it
+// in the capture phase:
+//  - Outside a Text box, `stopPropagation` keeps MathLive's own
+//    `compositionstart` handler from running (and its `input` handler already
+//    discards `insertCompositionText`), so no Chinese text is inserted in math
+//    mode.
+//  - Inside a filled Text box, the event is left untouched so MathLive's native
+//    composition handling runs.
+//  - Inside an EMPTY Text box (whose content is the invisible `\phantom{Text}`
+//    sentinel) the caret sits on the box's branch-start atom in math mode, so
+//    MathLive's native composition would fold the composed text into the
+//    phantom. We block it and reinsert the final text ourselves using the same
+//    `\text{...}` rebuild as ordinary typing.
+function onCompositionStart(event: CompositionEvent) {
+  const mf = getMf()
+  if (!mf) {
+    return
+  }
+  imeComposing = true
+  const group = textGroupAtCaret(mf)
+  if (!group) {
+    imeSuppressed = true
+    event.stopPropagation()
+    return
+  }
+  imeSuppressed = false
+  if (isEmptyTextLatex(group.latex)) {
+    imeEmptyTextCompose = true
+    imeCompositionData = ''
+    event.stopPropagation()
+  }
+}
+
+function onCompositionUpdate(event: CompositionEvent) {
+  if (imeEmptyTextCompose) {
+    imeCompositionData = event.data ?? ''
+  }
+}
+
+function onCompositionEnd(event: CompositionEvent) {
+  const wasSuppressed = imeSuppressed
+  const wasEmptyCompose = imeEmptyTextCompose
+  imeComposing = false
+  imeSuppressed = false
+  imeEmptyTextCompose = false
+  if (wasSuppressed) {
+    return
+  }
+  const mf = getMf()
+  if (!mf) {
+    return
+  }
+  if (wasEmptyCompose) {
+    const data = event.data ?? imeCompositionData ?? ''
+    imeCompositionData = ''
+    if (data) {
+      insertCompositionIntoEmptyText(mf, data)
+      return
+    }
+  }
+  // MathLive also fires an `input` event after composition (which runs the
+  // normal normalization pipeline); this pass is idempotent and guarantees the
+  // text model, caret and "Text" hints are re-synced even if the event ordering
+  // differs across WebKit/Chromium.
+  scheduleRestorePlaceholders(mf)
+  syncCaretInText()
+  scheduleUpdateTextHints()
+}
+
+function insertCompositionIntoEmptyText(mf: MathfieldElement, text: string) {
+  const group = textGroupAtCaret(mf)
+  if (!group || !isEmptyTextLatex(group.latex)) {
+    // The empty box changed underneath us; fall back to the normal sync pass.
+    scheduleRestorePlaceholders(mf)
+    syncCaretInText()
+    scheduleUpdateTextHints()
+    return
+  }
+  const escaped = text.replace(/([\\{}#$&^_~%])/g, '\\$1')
+  const groupLatex = `\\${group.command}{${escaped}}`
+  mf.selection = { ranges: [[group.start, group.end]] }
+  mf.insert(groupLatex, {
+    insertionMode: 'replaceSelection',
+    mode: 'math',
+    format: 'latex',
+    silenceNotifications: true,
+  })
+  normalizeTextModel(mf)
+  placeCaretInTextGroup(mf, groupLatex, Math.max(0, escaped.length - 1))
+  publishState(mf)
+  syncCaretInText()
+  scheduleUpdateTextHints()
 }
 
 function insertMathChar(mf: MathfieldElement, event: KeyboardEvent): void {
@@ -1536,7 +1645,8 @@ function handleKeydown(event: KeyboardEvent) {
     event.key.length === 1 &&
     !event.ctrlKey &&
     !event.metaKey &&
-    !event.altKey
+    !event.altKey &&
+    !event.isComposing
   ) {
     const group = textGroupAtCaret(mf)
     if (group) {
@@ -2398,6 +2508,9 @@ defineExpose({
           :style="{ fontSize: `${fontSize}px` }"
           @input="onMfInput($event.target as unknown as MathfieldElement)"
           @keydown.capture="onMfKeydown"
+          @compositionstart.capture="onCompositionStart"
+          @compositionupdate.capture="onCompositionUpdate"
+          @compositionend.capture="onCompositionEnd"
           @pointerdown.capture="onMfPointerDown"
           @undo-state-change="onUndoStateChange($event.target as unknown as MathfieldElement)"
           @focus="syncPlaceholderSelected(); syncCaretInText(); scheduleUpdateTextHints()"
@@ -2438,7 +2551,7 @@ defineExpose({
       ></div>
       <Transition name="fade">
         <div v-if="dragging" class="workspace-drop-hint" aria-hidden="true">
-          Drop to insert at the caret
+          {{ t('workspace.dropHint') }}
         </div>
       </Transition>
     </div>

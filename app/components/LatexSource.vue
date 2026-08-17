@@ -3,6 +3,7 @@ import { ref, watch } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { copyTextToClipboard, downloadTextFile } from '~/utils/clipboard'
 import { isTauriRuntime } from '~/composables/useEquationExport'
+import { useI18n } from '~/composables/useI18n'
 
 const props = defineProps<{ latex: string; errors: string[] }>()
 
@@ -10,6 +11,8 @@ const emit = defineEmits<{
   apply: [value: string]
   toast: [message: string, kind: 'success' | 'error']
 }>()
+
+const { t } = useI18n()
 
 const draft = ref(props.latex)
 const editing = ref(false)
@@ -42,12 +45,12 @@ function onBlur() {
 
 async function onCopy() {
   const ok = await copyTextToClipboard(props.latex)
-  emit('toast', ok ? 'LaTeX copied to clipboard.' : 'Clipboard unavailable.', ok ? 'success' : 'error')
+  emit('toast', ok ? t('toast.latexCopted') : t('toast.clipboardUnavailable'), ok ? 'success' : 'error')
 }
 
 async function onSaveTex() {
   if (!props.latex.trim()) {
-    emit('toast', 'The equation is empty.', 'error')
+    emit('toast', t('toast.empty'), 'error')
     return
   }
   try {
@@ -56,11 +59,11 @@ async function onSaveTex() {
         request: { contents: props.latex },
       })
       if (savedPath) {
-        emit('toast', `Saved to ${savedPath}`, 'success')
+        emit('toast', t('toast.savedTo', { path: savedPath }), 'success')
       }
     } else {
       downloadTextFile(props.latex, 'equation.tex', 'application/x-tex')
-      emit('toast', 'Downloaded equation.tex', 'success')
+      emit('toast', t('toast.downloaded'), 'success')
     }
   } catch (error) {
     emit('toast', error instanceof Error ? error.message : String(error), 'error')
@@ -76,7 +79,7 @@ async function onImportTex() {
       }
       draft.value = contents
       emit('apply', contents)
-      emit('toast', 'Loaded LaTeX file', 'success')
+      emit('toast', t('toast.loadedLatex'), 'success')
     } else {
       fileInput.value?.click()
     }
@@ -96,9 +99,9 @@ function onFilePicked(event: Event) {
     .then((contents) => {
       draft.value = contents
       emit('apply', contents)
-      emit('toast', `Loaded ${file.name}`, 'success')
+      emit('toast', t('toast.loadedFile', { file: file.name }), 'success')
     })
-    .catch(() => emit('toast', 'Could not read the selected file.', 'error'))
+    .catch(() => emit('toast', t('toast.couldNotReadSelected'), 'error'))
     .finally(() => {
       input.value = ''
     })
@@ -108,11 +111,11 @@ function onFilePicked(event: Event) {
 <template>
   <section class="latex-source">
     <div class="panel-header">
-      <h2 class="panel-title">LaTeX Source</h2>
+      <h2 class="panel-title">{{ t('source.title') }}</h2>
       <div class="panel-actions">
-        <button type="button" class="btn btn-ghost btn-sm" @click="onCopy">Copy</button>
-        <button type="button" class="btn btn-ghost btn-sm" @click="onImportTex">Import</button>
-        <button type="button" class="btn btn-ghost btn-sm" @click="onSaveTex">Save .tex</button>
+        <button type="button" class="btn btn-ghost btn-sm" @click="onCopy">{{ t('source.copy') }}</button>
+        <button type="button" class="btn btn-ghost btn-sm" @click="onImportTex">{{ t('source.import') }}</button>
+        <button type="button" class="btn btn-ghost btn-sm" @click="onSaveTex">{{ t('source.saveTex') }}</button>
       </div>
     </div>
     <textarea
@@ -122,7 +125,7 @@ function onFilePicked(event: Event) {
       spellcheck="false"
       autocapitalize="off"
       autocomplete="off"
-      aria-label="LaTeX source"
+      :aria-label="t('source.aria')"
       :aria-invalid="errors.length > 0"
       :aria-describedby="errors.length > 0 ? 'latex-errors' : undefined"
       @input="onInput"

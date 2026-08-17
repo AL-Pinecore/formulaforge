@@ -1,4 +1,9 @@
 <script setup lang="ts">
+import { useI18n } from '~/composables/useI18n'
+import type { Locale } from '~/composables/useI18n'
+import { useTheme } from '~/composables/useTheme'
+import type { ThemePreference } from '~/composables/useTheme'
+
 const props = defineProps<{
   canUndo: boolean
   canRedo: boolean
@@ -13,7 +18,18 @@ const emit = defineEmits<{
   copy: [kind: 'raw' | 'inline' | 'display']
 }>()
 
+const { locale, t, setLocale, availableLocales, localeDisplayName } = useI18n()
+const { theme, setTheme, availableThemes } = useTheme()
+
 const FONT_SIZES = [16, 20, 24, 32]
+
+function onLocaleChange(event: Event) {
+  setLocale((event.target as HTMLSelectElement).value as Locale)
+}
+
+function onThemeChange(event: Event) {
+  setTheme((event.target as HTMLSelectElement).value as ThemePreference)
+}
 </script>
 
 <template>
@@ -27,20 +43,20 @@ const FONT_SIZES = [16, 20, 24, 32]
       <span class="brand-name">FormulaForge</span>
     </div>
 
-    <div class="toolbar-group" role="group" aria-label="Editing actions">
+    <div class="toolbar-group" role="group" :aria-label="t('toolbar.editingActions')">
       <button type="button" class="btn btn-ghost" :disabled="!props.canUndo" @click="emit('undo')">
-        Undo
+        {{ t('toolbar.undo') }}
       </button>
       <button type="button" class="btn btn-ghost" :disabled="!props.canRedo" @click="emit('redo')">
-        Redo
+        {{ t('toolbar.redo') }}
       </button>
-      <button type="button" class="btn btn-ghost" @click="emit('clear')">Clear</button>
+      <button type="button" class="btn btn-ghost" @click="emit('clear')">{{ t('toolbar.clear') }}</button>
     </div>
 
-    <div class="toolbar-group" role="group" aria-label="Equation font size">
+    <div class="toolbar-group" role="group" :aria-label="t('toolbar.fontSize')">
       <select
         class="font-size-select"
-        aria-label="Equation font size"
+        :aria-label="t('toolbar.fontSize')"
         :value="props.fontSize"
         @change="emit('font-size', Number(($event.target as HTMLSelectElement).value))"
       >
@@ -50,11 +66,41 @@ const FONT_SIZES = [16, 20, 24, 32]
 
     <div class="toolbar-spacer"></div>
 
-    <div class="toolbar-group" role="group" aria-label="Copy LaTeX">
-      <button type="button" class="btn btn-ghost" @click="emit('copy', 'raw')">Copy LaTeX</button>
-      <button type="button" class="btn btn-ghost" @click="emit('copy', 'inline')">Copy Inline</button>
+    <div class="toolbar-group" role="group" :aria-label="t('toolbar.theme')">
+      <select
+        class="font-size-select"
+        :aria-label="t('toolbar.theme')"
+        :value="theme"
+        @change="onThemeChange"
+      >
+        <option v-for="value in availableThemes" :key="value" :value="value">
+          {{ t(`theme.${value}`) }}
+        </option>
+      </select>
+    </div>
+
+    <div class="toolbar-group" role="group" :aria-label="t('toolbar.language')">
+      <select
+        class="font-size-select"
+        :aria-label="t('toolbar.language')"
+        :value="locale"
+        @change="onLocaleChange"
+      >
+        <option v-for="l in availableLocales" :key="l" :value="l">
+          {{ localeDisplayName(l) }}
+        </option>
+      </select>
+    </div>
+
+    <div class="toolbar-group" role="group" :aria-label="t('toolbar.copy')">
+      <button type="button" class="btn btn-ghost" @click="emit('copy', 'raw')">
+        {{ t('toolbar.copyLatex') }}
+      </button>
+      <button type="button" class="btn btn-ghost" @click="emit('copy', 'inline')">
+        {{ t('toolbar.copyInline') }}
+      </button>
       <button type="button" class="btn btn-ghost" @click="emit('copy', 'display')">
-        Copy Display
+        {{ t('toolbar.copyDisplay') }}
       </button>
     </div>
   </header>

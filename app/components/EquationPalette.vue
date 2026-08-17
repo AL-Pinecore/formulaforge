@@ -1,15 +1,84 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, ref } from 'vue'
 import { ELEMENT_CATEGORY_LABELS, ELEMENT_CATEGORY_ORDER } from '~/types/equation'
 import type { ElementCategory, EquationElement } from '~/types/equation'
 import { EQUATION_ELEMENTS } from '~/data/equation-elements'
 import { DRAG_ELEMENT_MIME, draggedElementId } from '~/utils/drag-payload'
+import { toCamelCase } from '~/utils/string-case'
+import { useI18n } from '~/composables/useI18n'
 
 const emit = defineEmits<{ insert: [element: EquationElement] }>()
+
+const { t } = useI18n()
 
 const search = ref('')
 
 const collapsed = ref<Set<ElementCategory>>(new Set(ELEMENT_CATEGORY_ORDER))
+
+function elementLabel(element: EquationElement): string {
+  return t(`element.${toCamelCase(element.id)}`, undefined, element.label)
+}
+
+const TOOLTIP_DELAY_MS = 1000
+const TOOLTIP_MARGIN = 8
+const TOOLTIP_GAP = 6
+
+const tooltip = ref<{ text: string } | null>(null)
+const tooltipEl = ref<HTMLElement | null>(null)
+let tooltipTimer: ReturnType<typeof setTimeout> | null = null
+let tooltipAnchor: { left: number; right: number; top: number; bottom: number } | null = null
+
+function clearTooltip() {
+  if (tooltipTimer) {
+    clearTimeout(tooltipTimer)
+    tooltipTimer = null
+  }
+  tooltip.value = null
+  tooltipAnchor = null
+}
+
+function positionTooltip() {
+  const el = tooltipEl.value
+  if (!el || !tooltipAnchor) {
+    return
+  }
+  const width = el.offsetWidth
+  const height = el.offsetHeight
+  const viewportWidth = window.innerWidth
+  const viewportHeight = window.innerHeight
+  const center = (tooltipAnchor.left + tooltipAnchor.right) / 2
+
+  let left = center - width / 2
+  left = Math.max(TOOLTIP_MARGIN, Math.min(left, viewportWidth - width - TOOLTIP_MARGIN))
+
+  let top = tooltipAnchor.bottom + TOOLTIP_GAP
+  if (top + height + TOOLTIP_MARGIN > viewportHeight) {
+    top = tooltipAnchor.top - height - TOOLTIP_GAP
+  }
+  top = Math.max(TOOLTIP_MARGIN, top)
+
+  el.style.left = `${left}px`
+  el.style.top = `${top}px`
+}
+
+function onItemEnter(event: MouseEvent, element: EquationElement) {
+  clearTooltip()
+  const rect = (event.currentTarget as HTMLElement).getBoundingClientRect()
+  const text = elementLabel(element)
+  tooltipAnchor = { left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom }
+  tooltipTimer = setTimeout(() => {
+    tooltip.value = { text }
+    void nextTick(positionTooltip)
+  }, TOOLTIP_DELAY_MS)
+}
+
+function onItemLeave() {
+  clearTooltip()
+}
+
+onBeforeUnmount(() => {
+  clearTooltip()
+})
 
 function isOpen(category: ElementCategory): boolean {
   return search.value.trim() !== '' || !collapsed.value.has(category)
@@ -31,7 +100,14 @@ const filtered = computed(() => {
     return EQUATION_ELEMENTS
   }
   return EQUATION_ELEMENTS.filter((element) => {
-    const haystack = [element.label, element.id, element.category, ...element.keywords]
+    const haystack = [
+      elementLabel(element),
+      element.label,
+      element.id,
+      t(ELEMENT_CATEGORY_LABELS[element.category]),
+      element.category,
+      ...element.keywords,
+    ]
       .join(' ')
       .toLowerCase()
     return haystack.includes(query)
@@ -50,6 +126,7 @@ const grouped = computed(() => {
 })
 
 function onDragStart(event: DragEvent, element: EquationElement) {
+  clearTooltip()
   draggedElementId.value = element.id
   if (event.dataTransfer) {
     event.dataTransfer.setData(DRAG_ELEMENT_MIME, element.id)
@@ -91,17 +168,17 @@ function onDragEnd() {
 <template>
   <aside class="palette">
     <div class="palette-search">
-      <label class="sr-only" for="palette-search">Search equation elements</label>
+      <label class="sr-only" for="palette-search">{{ t('palette.searchLabel') }}</label>
       <input
         id="palette-search"
         v-model="search"
         type="search"
-        placeholder="Search symbols…"
+        :placeholder="t('palette.search')"
         autocomplete="off"
         spellcheck="false"
       />
     </div>
-    <div class="palette-scroll">
+    <div class="palette-scroll" @scroll="clearTooltip">
       <section v-for="[category, items] in grouped" :key="category" class="palette-section">
         <button
           type="button"
@@ -110,7 +187,7 @@ function onDragEnd() {
           @click="toggle(category)"
         >
           <span class="palette-chevron" :class="{ 'palette-chevron-open': isOpen(category) }" aria-hidden="true"></span>
-          <span>{{ ELEMENT_CATEGORY_LABELS[category] }}</span>
+          <span>{{ t(ELEMENT_CATEGORY_LABELS[category]) }}</span>
         </button>
         <ul v-show="isOpen(category)" class="palette-grid">
           <li v-for="element in items" :key="element.id">
@@ -118,8 +195,9 @@ function onDragEnd() {
               type="button"
               class="palette-item"
               draggable="true"
-              :title="`${element.label} — click or drag into the equation`"
-              :aria-label="`Insert ${element.label}`"
+              :aria-label="t('palette.insert', { label: elementLabel(element) })"
+              @mouseenter="onItemEnter($event, element)"
+              @mouseleave="onItemLeave"
               @dragstart="onDragStart($event, element)"
               @dragend="onDragEnd"
               @click="emit('insert', element)"
@@ -129,8 +207,18 @@ function onDragEnd() {
           </li>
         </ul>
       </section>
-      <p v-if="grouped.length === 0" class="palette-empty">No matching elements.</p>
+      <p v-if="grouped.length === 0" class="palette-empty">{{ t('palette.empty') }}</p>
     </div>
+    <Transition name="tooltip">
+      <div
+        v-if="tooltip"
+        ref="tooltipEl"
+        class="palette-tooltip"
+        role="tooltip"
+      >
+        {{ tooltip.text }}
+      </div>
+    </Transition>
   </aside>
 </template>
 
@@ -265,5 +353,32 @@ function onDragEnd() {
   padding: 16px 4px;
   font-size: 13px;
   color: var(--text-muted);
+}
+
+.palette-tooltip {
+  position: fixed;
+  z-index: 100;
+  max-width: 320px;
+  padding: 5px 9px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--input-bg);
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.4;
+  text-align: center;
+  pointer-events: none;
+  box-shadow: 0 4px 12px rgb(0 0 0 / 25%);
+}
+
+.tooltip-enter-active,
+.tooltip-leave-active {
+  transition: opacity 120ms ease;
+}
+
+.tooltip-enter-from,
+.tooltip-leave-to {
+  opacity: 0;
 }
 </style>

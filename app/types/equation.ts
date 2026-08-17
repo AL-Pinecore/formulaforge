@@ -24,20 +24,20 @@ export interface EquationElement {
 }
 
 export const ELEMENT_CATEGORY_LABELS: Record<ElementCategory, string> = {
-  basic: 'Basic',
-  fractions: 'Fractions',
-  scripts: 'Powers & Indices',
-  roots: 'Roots',
-  delimiters: 'Brackets',
-  'large-ops': 'Sums & Integrals',
-  functions: 'Functions',
-  text: 'Text',
-  greek: 'Greek Letters',
-  logic: 'Logic',
-  sets: 'Sets',
-  arrows: 'Arrows',
-  accents: 'Accents',
-  matrices: 'Matrices',
+  basic: 'category.basic',
+  fractions: 'category.fractions',
+  scripts: 'category.scripts',
+  roots: 'category.roots',
+  delimiters: 'category.delimiters',
+  'large-ops': 'category.largeOps',
+  functions: 'category.functions',
+  text: 'category.text',
+  greek: 'category.greek',
+  logic: 'category.logic',
+  sets: 'category.sets',
+  arrows: 'category.arrows',
+  accents: 'category.accents',
+  matrices: 'category.matrices',
 }
 
 export const ELEMENT_CATEGORY_ORDER: ElementCategory[] = [

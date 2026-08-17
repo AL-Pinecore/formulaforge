@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import { useEquation } from '~/composables/useEquation'
+import { useI18n } from '~/composables/useI18n'
 import { copyTextToClipboard, wrapDisplayMath, wrapInlineMath } from '~/utils/clipboard'
 import type { EquationElement } from '~/types/equation'
 import EquationWorkspace from '~/components/EquationWorkspace.vue'
@@ -10,14 +11,15 @@ import ExportPanel from '~/components/ExportPanel.vue'
 import AppToolbar from '~/components/AppToolbar.vue'
 
 const eq = useEquation()
+const { locale, t } = useI18n()
 const workspace = ref<InstanceType<typeof EquationWorkspace> | null>(null)
 const toast = ref<{ message: string; kind: 'success' | 'error' } | null>(null)
 let toastTimer: ReturnType<typeof setTimeout> | null = null
 
-useHead({
-  title: 'FormulaForge — LaTeX Equation Editor',
-  htmlAttrs: { lang: 'en' },
-})
+useHead(() => ({
+  title: t('app.title'),
+  htmlAttrs: { lang: locale.value },
+}))
 
 function showToast(message: string, kind: 'success' | 'error' = 'success') {
   toast.value = { message, kind }
@@ -55,12 +57,12 @@ function onFontSize(px: number) {
 async function onCopy(kind: 'raw' | 'inline' | 'display') {
   const latex = eq.latex.value
   if (!latex.trim()) {
-    showToast('The equation is empty.', 'error')
+    showToast(t('toast.empty'), 'error')
     return
   }
   const text = kind === 'raw' ? latex : kind === 'inline' ? wrapInlineMath(latex) : wrapDisplayMath(latex)
   const ok = await copyTextToClipboard(text)
-  showToast(ok ? 'Copied to clipboard.' : 'Clipboard unavailable.', ok ? 'success' : 'error')
+  showToast(ok ? t('toast.copied') : t('toast.clipboardUnavailable'), ok ? 'success' : 'error')
 }
 </script>
 
