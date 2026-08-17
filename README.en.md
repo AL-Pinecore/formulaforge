@@ -10,6 +10,7 @@
 
 [![CI](https://img.shields.io/github/actions/workflow/status/AL-Pinecore/formulaforge/build.yml?label=CI&style=flat-square)](https://github.com/AL-Pinecore/formulaforge/actions/workflows/build.yml)
 [![Version](https://img.shields.io/github/v/release/AL-Pinecore/formulaforge?style=flat-square)](https://github.com/AL-Pinecore/formulaforge/releases)
+[![Downloads](https://img.shields.io/github/downloads/AL-Pinecore/formulaforge/total?style=flat-square)](https://github.com/AL-Pinecore/formulaforge/releases)
 [![Tauri 2](https://img.shields.io/badge/Tauri-2-67C8A2?style=flat-square)](https://tauri.app/)
 [![Nuxt 4](https://img.shields.io/badge/Nuxt-4-00DC82?style=flat-square)](https://nuxt.com/)
 
