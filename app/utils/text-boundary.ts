@@ -125,6 +125,39 @@ function textCommandEnd(source: string, start: number): number {
   return argumentEnd < 0 ? -1 : argumentEnd + 1
 }
 
+// Operator commands whose argument renders in text mode (`\operatorname`,
+// `\operatorname*`). They are opaque to the text-box machinery: wrapping the
+// inner `\mathrm{...}` MathLive re-serializes them as in zero-width markers
+// corrupts the model (e.g. `\operatorname{\mathrm{mm}}` breaking integral
+// limits), so the whole command must be copied through untouched.
+const OPAQUE_TEXT_COMMANDS = new Set(['operatorname'])
+
+function opaqueTextCommandEnd(source: string, start: number): number {
+  if (source[start] !== '\\') {
+    return -1
+  }
+  let commandEnd = start + 1
+  while (commandEnd < source.length && /[A-Za-z]/.test(source[commandEnd]!)) {
+    commandEnd++
+  }
+  const command = source.slice(start + 1, commandEnd)
+  if (!OPAQUE_TEXT_COMMANDS.has(command)) {
+    return -1
+  }
+  let argumentStart = commandEnd
+  if (source[argumentStart] === '*') {
+    argumentStart++
+  }
+  while (argumentStart < source.length && /\s/.test(source[argumentStart]!)) {
+    argumentStart++
+  }
+  if (source[argumentStart] !== '{') {
+    return -1
+  }
+  const argumentEnd = matchingBrace(source, argumentStart)
+  return argumentEnd < 0 ? -1 : argumentEnd + 1
+}
+
 // Whether a serialized atom (e.g. `\text{a}`, `\mathbf{b}`) is one of the text
 // box commands (text-mode or math-mode font commands).
 export function isTextCommandLatex(latex: string | undefined): boolean {
@@ -206,6 +239,12 @@ export function addTextBoundaries(latex: string): string {
   let cursor = 0
 
   while (cursor < source.length) {
+    const opaqueEnd = opaqueTextCommandEnd(source, cursor)
+    if (opaqueEnd >= 0) {
+      result += source.slice(cursor, opaqueEnd)
+      cursor = opaqueEnd
+      continue
+    }
     const commandEnd = textCommandEnd(source, cursor)
     if (commandEnd < 0) {
       result += source[cursor]

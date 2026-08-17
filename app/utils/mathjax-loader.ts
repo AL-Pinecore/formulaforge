@@ -24,6 +24,11 @@ function loadMathJax(): Promise<MathJaxLike> {
     loader: { paths: { fonts: '' } },
     options: { enableMenu: false },
     svg: { fontCache: 'local', blacker: 3, useXlink: true },
+    tex: {
+      // MathLive serializes its differential as `\differentialD`; MathJax has
+      // no such command, so map it to the standard upright differential.
+      macros: { differentialD: '\\mathrm{d}' },
+    },
   } as unknown as MathJaxLike
   const attempt = new Promise<MathJaxLike>((resolve, reject) => {
     const script = document.createElement('script')

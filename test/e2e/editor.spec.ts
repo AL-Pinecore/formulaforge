@@ -193,6 +193,123 @@ test('right arrow and a right-side click continue after a final Text box', async
   await expect(textarea).toHaveValue('\\text{Tex}y', { timeout: 10000 })
 })
 
+test('a fence typed two-left of a Text box inserts before it, not wrapped', async ({
+  page,
+  goto,
+}) => {
+  await goto('/', { waitUntil: 'hydration' })
+  const textarea = page.locator('.latex-textarea')
+  const field = page.locator('math-field')
+  await textarea.fill('\\text{Tex}')
+  await textarea.blur()
+  await expect(textarea).toHaveValue('\\text{Tex}')
+
+  await field.evaluate((element) => {
+    const mf = element as unknown as {
+      lastOffset: number
+      position: number
+      focus(): void
+      getElementInfo(offset: number): { latex?: string } | undefined
+    }
+    mf.focus()
+    for (let offset = 0; offset <= mf.lastOffset; offset++) {
+      if (mf.getElementInfo(offset)?.latex === '\\text{T}') {
+        mf.position = offset
+        break
+      }
+    }
+  })
+  await expect(field).toBeFocused()
+  await page.keyboard.press('ArrowLeft')
+  await expect(field).toHaveClass(/caret-in-text/)
+  await page.keyboard.press('ArrowLeft')
+  await expect(field).not.toHaveClass(/caret-in-text/)
+  await page.keyboard.press('Shift+Digit9')
+  await expect(textarea).toHaveValue('(\\text{Tex}', { timeout: 10000 })
+})
+
+test('fences typed right of a Text box insert after it, not into the text', async ({
+  page,
+  goto,
+}) => {
+  await goto('/', { waitUntil: 'hydration' })
+  const textarea = page.locator('.latex-textarea')
+  const field = page.locator('math-field')
+  const fenceKeys = [
+    ['(', 'Shift+Digit9'],
+    [')', 'Shift+Digit0'],
+    ['[', 'BracketLeft'],
+    [']', 'BracketRight'],
+    ['{', 'Shift+BracketLeft'],
+    ['}', 'Shift+BracketRight'],
+    ['|', 'Shift+Backslash'],
+  ] as const
+
+  for (const [fence, key] of fenceKeys) {
+    await textarea.fill('\\text{Tex}')
+    await textarea.blur()
+    await expect(textarea).toHaveValue('\\text{Tex}')
+
+    await field.evaluate((element) => {
+      const mf = element as unknown as {
+        lastOffset: number
+        position: number
+        focus(): void
+        getElementInfo(offset: number): { latex?: string } | undefined
+      }
+      mf.focus()
+      for (let offset = mf.lastOffset; offset >= 0; offset--) {
+        if (mf.getElementInfo(offset)?.latex === '\\text{x}') {
+          mf.position = offset
+          break
+        }
+      }
+    })
+    await expect(field).toBeFocused()
+    await page.keyboard.press('ArrowRight')
+    await expect(field).not.toHaveClass(/caret-in-text/)
+    await page.keyboard.press(key)
+    await expect
+      .poll(() => textarea.inputValue(), {
+        message: `Fence ${JSON.stringify(fence)} should be outside the Text box`,
+        timeout: 10000,
+      })
+      .toMatch(/^\\text\{Tex\}.+/)
+  }
+})
+
+test('moving to the last character inside Text does not escape the box early', async ({
+  page,
+  goto,
+}) => {
+  await goto('/', { waitUntil: 'hydration' })
+  const textarea = page.locator('.latex-textarea')
+  const field = page.locator('math-field')
+  await textarea.fill('\\text{Tex}')
+  await textarea.blur()
+
+  await field.evaluate((element) => {
+    const mf = element as unknown as {
+      lastOffset: number
+      position: number
+      focus(): void
+      getElementInfo(offset: number): { latex?: string } | undefined
+    }
+    mf.focus()
+    for (let offset = mf.lastOffset; offset >= 0; offset--) {
+      if (mf.getElementInfo(offset)?.latex === '\\text{e}') {
+        mf.position = offset
+        break
+      }
+    }
+  })
+  await expect(field).toBeFocused()
+  await page.keyboard.press('ArrowRight')
+  await expect(field).toHaveClass(/caret-in-text/)
+  await page.keyboard.press('Shift+Digit9')
+  await expect(textarea).toHaveValue('\\text{Tex(}', { timeout: 10000 })
+})
+
 test('Delete right after a Text box edits the text without corrupting markers', async ({
   page,
   goto,

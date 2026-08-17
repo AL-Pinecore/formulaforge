@@ -125,6 +125,24 @@ describe('text boundaries', () => {
     )
   })
 
+  it('leaves operator commands opaque so inner text is never marked', () => {
+    expect(addTextBoundaries('\\operatorname{\\mathrm{mm}}')).toBe(
+      '\\operatorname{\\mathrm{mm}}',
+    )
+    expect(addTextBoundaries('\\int_{}^{\\operatorname{\\mathrm{mm}}}')).toBe(
+      '\\int_{}^{\\operatorname{\\mathrm{mm}}}',
+    )
+    expect(addTextBoundaries('\\operatorname*{arg\\,min}')).toBe(
+      '\\operatorname*{arg\\,min}',
+    )
+  })
+
+  it('still marks text commands outside an operator argument', () => {
+    expect(addTextBoundaries('\\mathrm{a}\\operatorname{\\mathrm{mm}}\\mathrm{b}')).toBe(
+      `${TEXT_BOUNDARY_LATEX}\\mathrm{a}${TEXT_BOUNDARY_LATEX}\\operatorname{\\mathrm{mm}}${TEXT_BOUNDARY_LATEX}\\mathrm{b}${TEXT_BOUNDARY_LATEX}`,
+    )
+  })
+
   it('uses the text-mode phantom sentinel for math-font empty boxes', () => {
     expect(withEmptyTextSentinel('\\mathbf{#0}')).toBe(
       '\\mathbf{\\phantom{\\text{Text}}}',

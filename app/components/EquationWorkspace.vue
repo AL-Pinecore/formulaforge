@@ -7,6 +7,7 @@ import { restoreEmptyGroupLatex } from '~/utils/empty-group'
 import { FONT_STYLES, FONT_STYLE_TEXT_COMMANDS, isFontStyleElement } from '~/utils/font-styles'
 import { ensurePlaceholderSupport } from '~/utils/mathfield-placeholder'
 import { removeElementAtPlaceholder } from '~/utils/remove-empty-element'
+import { normalizeDifferential } from '~/utils/latex-normalize'
 import {
   addTextBoundaries,
   emptyTextSentinelLatex,
@@ -474,10 +475,12 @@ function publishState(mf: MathfieldElement) {
 }
 
 function publicLatex(mf: MathfieldElement): string {
-  return stripEmptyTextSentinel(
-    stripTextBoundaries(mf.getValue('latex-without-placeholders')).replace(
-      /\\placeholder(?:\[[^\]]*\])?\{\}/g,
-      '',
+  return normalizeDifferential(
+    stripEmptyTextSentinel(
+      stripTextBoundaries(mf.getValue('latex-without-placeholders')).replace(
+        /\\placeholder(?:\[[^\]]*\])?\{\}/g,
+        '',
+      ),
     ),
   )
 }
@@ -1448,26 +1451,61 @@ function rootIndexAtomBeforeCaret(mf: MathfieldElement): boolean {
 // has left the box (the user wants to type outside it), while the same
 // position reached by typing/clicking inside belongs to the box.
 let caretArrivedByNavigation = false
+// The direction of the last arrow navigation. This capture handler runs before
+// MathLive's shadow-DOM key handler, and MathLive can represent the last caret
+// stop inside a Text box and the first stop outside it with the same edge
+// offset. The direction plus the `caret-in-text` state updated by
+// `selection-change` disambiguates which side the caret reached.
+let lastArrowDirection: 'left' | 'right' | null = null
 
 function onMfKeydown(event: KeyboardEvent) {
   const isArrowKey = event.key === 'ArrowLeft' || event.key === 'ArrowRight'
+  const isModifierKey =
+    event.key === 'Shift' ||
+    event.key === 'Control' ||
+    event.key === 'Alt' ||
+    event.key === 'Meta'
+  const direction =
+    event.key === 'ArrowLeft' ? 'left' : event.key === 'ArrowRight' ? 'right' : null
   try {
     handleKeydown(event)
   } finally {
-    caretArrivedByNavigation = isArrowKey
+    if (isArrowKey) {
+      caretArrivedByNavigation = true
+      if (direction) {
+        lastArrowDirection = direction
+      }
+    } else if (!isModifierKey) {
+      // Shift is part of the physical key sequence for characters such as
+      // `(` (Shift+9). Keep the navigation state through modifier keydowns so
+      // the following printable key still knows the caret left the Text box.
+      caretArrivedByNavigation = false
+    }
   }
 }
 
 function insertMathChar(mf: MathfieldElement, event: KeyboardEvent): void {
   event.preventDefault()
   event.stopPropagation()
-  mf.insert(event.key, {
+  // Raw braces are LaTeX grouping tokens, so inserting `{`/`}` through the
+  // programmatic API produces no visible atom. Use their explicit math
+  // commands when a brace is typed just outside a Text box.
+  const latex = event.key === '{' ? '\\lbrace' : event.key === '}' ? '\\rbrace' : event.key
+  mf.insert(latex, {
     insertionMode: 'replaceSelection',
+    format: event.key === '{' || event.key === '}' ? 'latex' : 'auto',
     mode: 'math',
     silenceNotifications: true,
   })
   publishState(mf)
   scheduleUpdateTextHints()
+}
+
+// The caret sits immediately in front of a Text box, past its leading
+// zero-width marker. MathLive's own handling would let smart-fence characters
+// (parens, brackets, ...) wrap the whole box instead of inserting before it.
+function isCaretBeforeTextBox(mf: MathfieldElement): boolean {
+  return isTextBoundaryAtom(mf, mf.position + 1) && isTextAtom(mf, mf.position + 2)
 }
 
 function handleKeydown(event: KeyboardEvent) {
@@ -1488,21 +1526,40 @@ function handleKeydown(event: KeyboardEvent) {
     if (group) {
       const sel = mf.selection?.ranges?.[0]
       // Rebuilding a text group is only safe when the selection lies entirely
-        // inside it; let MathLive handle selections that span other content.
+      // inside it; let MathLive handle selections that span other content.
       if (sel && sel[1] > sel[0] && (sel[0] < group.start || sel[1] > group.end)) {
         return
       }
       const arrowedOut =
-        caretArrivedByNavigation && mf.selectionIsCollapsed && mf.position > group.end
+        caretArrivedByNavigation &&
+        mf.selectionIsCollapsed &&
+        !mf.classList.contains('caret-in-text') &&
+        ((lastArrowDirection === 'right' && mf.position >= group.end) ||
+          (lastArrowDirection === 'left' && mf.position <= group.start))
       if (isEmptyTextLatex(group.latex) || arrowedOut) {
         if (!mf.selectionIsCollapsed) {
           return
         }
         // A caret collapsed OUTSIDE the box (or one that just arrowed past its
         // last character) types in math mode instead of into the text box. The
-        // The inside range starts at the Text branch-start atom, immediately
-        // before its first character.
-        if (mf.position < group.start || mf.position > group.end) {
+        // inside range starts at the Text branch-start atom, immediately
+        // before its first character. `arrowedOut` must be trusted even when
+        // MathLive reports the same numeric edge offset on both sides, so it
+        // short-circuits into a math insert.
+        if (
+          arrowedOut ||
+          mf.position < group.start ||
+          mf.position > group.end
+        ) {
+          // Park the caret just beyond the zero-width boundary marker before
+          // inserting; the edge offset alone does not reliably identify which
+          // side of the marker MathLive selected.
+          if (arrowedOut) {
+            mf.position =
+              lastArrowDirection === 'right'
+                ? Math.min(group.end + 1, mf.lastOffset)
+                : Math.max(0, group.start - 1)
+          }
           insertMathChar(mf, event)
           return
         }
@@ -1550,6 +1607,14 @@ function handleKeydown(event: KeyboardEvent) {
       publishState(mf)
       syncCaretInText()
       scheduleUpdateTextHints()
+      return
+    }
+    if (isCaretBeforeTextBox(mf)) {
+      // The caret is just before a Text box: a printable character here types
+      // in math mode. Route it through the explicit math insert so fence
+      // characters are not captured by MathLive's smart-fence, which would
+      // otherwise wrap the adjacent Text box.
+      insertMathChar(mf, event)
       return
     }
   }
