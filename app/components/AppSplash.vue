@@ -18,7 +18,7 @@ const EASE_OUT_EXPO = 'cubic-bezier(0.16, 1, 0.3, 1)'
 
 const isTestEnv =
     import.meta.env.MODE === 'test' ||
-    (typeof navigator !== 'undefined' && navigator.webdriver === true)
+    (typeof navigator !== 'undefined' && navigator.webdriver)
 
 const nameRef = ref<HTMLElement | null>(null)
 
