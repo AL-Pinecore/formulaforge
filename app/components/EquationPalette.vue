@@ -19,7 +19,7 @@ function elementLabel(element: EquationElement): string {
   return t(`element.${toCamelCase(element.id)}`, undefined, element.label)
 }
 
-const TOOLTIP_DELAY_MS = 1000
+const TOOLTIP_DELAY_MS = 600
 const TOOLTIP_MARGIN = 8
 const TOOLTIP_GAP = 6
 

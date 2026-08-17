@@ -9,6 +9,7 @@ import EquationPalette from '~/components/EquationPalette.vue'
 import LatexSource from '~/components/LatexSource.vue'
 import ExportPanel from '~/components/ExportPanel.vue'
 import AppToolbar from '~/components/AppToolbar.vue'
+import AppSplash from '~/components/AppSplash.vue'
 
 const eq = useEquation()
 const { locale, t } = useI18n()
@@ -67,6 +68,7 @@ async function onCopy(kind: 'raw' | 'inline' | 'display') {
 </script>
 
 <template>
+  <AppSplash />
   <div class="app">
     <AppToolbar
       :can-undo="eq.canUndo.value"
