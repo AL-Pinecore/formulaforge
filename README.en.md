@@ -21,14 +21,7 @@ A drag-and-drop LaTeX equation editor desktop app. Drag equation elements from t
 ## Disclaimer
 This project is completely developed by AI, aiming to test AI's ability in developing project.
 
-Main: DeepSeek V4 Pro  
-Total used token: 925,651,744   
-Cache Hit: 903,746,304  
-Cache Miss: 18,103,078  
-Output: 3,802,362
-
-Assistance: ChatGPT 5.6 Sol
-
+Model used: ChatGPT 5.6 Sol, Deepseek V4 Pro
 ## Features
 
 - **Drag-and-drop editing**: 200+ equation elements (operators, functions, fractions, roots, sums/integrals, Greek letters, logic/set symbols, arrows, scripts, matrices, and more), insertable by click or drag.

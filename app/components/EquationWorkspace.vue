@@ -4,8 +4,10 @@ import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { getElementById } from '~/data/equation-elements'
 import { DRAG_ELEMENT_MIME, draggedElementId } from '~/utils/drag-payload'
 import { restoreEmptyGroupLatex } from '~/utils/empty-group'
+import { isAccentConstructLatex } from '~/utils/accent'
 import { FONT_STYLES, FONT_STYLE_TEXT_COMMANDS, isFontStyleElement } from '~/utils/font-styles'
 import { ensurePlaceholderSupport } from '~/utils/mathfield-placeholder'
+import { ensureAccentPositioning } from '~/utils/mathfield-accent'
 import { removeElementAtPlaceholder } from '~/utils/remove-empty-element'
 import { normalizeDifferential } from '~/utils/latex-normalize'
 import {
@@ -819,6 +821,7 @@ function syncCaretInText() {
   }
   const position = mf.position
   const group = textGroupAtCaret(mf)
+  const accent = accentGroupAtCaret(mf)
   // MathLive's `hasFocus()` (an internal `blurred` flag) can go stale when
   // focus is moved programmatically around its keyboard sink, so use the real
   // DOM focus instead.
@@ -834,7 +837,19 @@ function syncCaretInText() {
   const empty = Boolean(group && isEmptyTextLatex(group.latex))
   // Empty Text shows its gray hint only; Non-empty Text uses the actual
   // character bounds, not marker positions, as its highlight.
-  caretTextBox.value = inText && group && !empty ? group.bounds : null
+  const textBox = inText && group && !empty ? group.bounds : null
+  // A filled accent highlights its argument the same way a Text box does.
+  const inAccent = Boolean(focused && mf.selectionIsCollapsed && accent)
+  const accentBounds = accent && inAccent ? accentBoundsAt(mf, accent) : null
+  const accentBox = accentBounds
+    ? {
+        left: accentBounds.left,
+        top: accentBounds.top,
+        width: accentBounds.right - accentBounds.left,
+        height: accentBounds.bottom - accentBounds.top,
+      }
+    : null
+  caretTextBox.value = textBox ?? accentBox
 
   // The empty box's native caret sits on a zero-width branch atom and is not
   // visible, so a MathLive-style caret is overlaid in front of the gray "Text"
@@ -910,6 +925,7 @@ function configureMathfield(mf: MathfieldElement) {
     mf.setValue(normalized, { mode: 'math', silenceNotifications: true })
   }
   ensurePlaceholderSupport(mf)
+  ensureAccentPositioning(mf)
   observeFractionRendering(mf)
   publishState(mf)
 }
@@ -1622,6 +1638,20 @@ function handleKeydown(event: KeyboardEvent) {
   // so a single arrow press jumps out on either side (right before the closing
   // boundary, left before the opening one) where typing lands in math mode.
   if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
+    const accentTarget = accentArrowTarget(mf, event.key)
+    if (accentTarget != null) {
+      event.preventDefault()
+      event.stopPropagation()
+      mf.position = accentTarget
+      const emptyAccent = accentGroupAtAtom(mf, accentTarget)
+      if (emptyAccent && isAccentArgEmpty(mf, emptyAccent)) {
+        mf.selection = {
+          ranges: [[emptyAccent.start - 1, emptyAccent.start]],
+        }
+      }
+      onSelectionChange()
+      return
+    }
     const box = emptyTextGroupAtCaret(mf)
     if (box) {
       event.preventDefault()
@@ -1666,6 +1696,43 @@ function handleKeydown(event: KeyboardEvent) {
   // User-facing deletion semantics: Backspace deletes the character before the
   // caret (atom at `position`), Delete the one after it (atom at `position + 1`).
   const target = event.key === 'Delete' ? mf.position + 1 : mf.position
+  // Deleting a character inside an accent argument: MathLive treats the accent
+  // construct as opaque, so its native deletion removes the whole accent or
+  // nothing. Rebuild the argument without the targeted atom, like a Text box.
+  const accentTarget = accentGroupAtAtom(mf, target)
+  if (accentTarget) {
+    event.preventDefault()
+    event.stopPropagation()
+    const parts: string[] = []
+    for (let offset = accentTarget.start; offset <= accentTarget.end; offset++) {
+      if (offset === target) {
+        continue
+      }
+      parts.push(mf.getElementInfo(offset)?.latex ?? '')
+    }
+    const content = parts.join('')
+    const replacement = content
+      ? `\\${accentTarget.command}{${content}}`
+      : `\\${accentTarget.command}{\\placeholder{}}`
+    mf.selection = {
+      ranges: [[accentTarget.start - 1, accentTarget.constructOffset]],
+    }
+    mf.insert(replacement, {
+      insertionMode: 'replaceSelection',
+      mode: 'math',
+      format: 'latex',
+      silenceNotifications: true,
+    })
+    if (content) {
+      mf.position = Math.min(Math.max(0, target - 1), mf.lastOffset)
+    } else {
+      enterPlaceholder(mf, Math.min(accentTarget.start, mf.lastOffset))
+    }
+    publishState(mf)
+    onSelectionChange()
+    scheduleUpdateTextHints()
+    return
+  }
   let targetGroup = isTextAtom(mf, target) ? textGroupFromAtom(mf, target) : null
   if (!targetGroup && mf.getElementInfo(target)?.latex === '') {
     // The deletion points at the empty container atom in front of a text group
@@ -1877,6 +1944,183 @@ function enterPlaceholder(mf: MathfieldElement, offset: number) {
   )
 }
 
+// An accent construct (`\hat{...}`, `\bar{...}`, ...) located in the model. The
+// construct atom serializes the whole command and sits at `constructOffset`;
+// its argument's content atoms are the contiguous non-empty run(s) right before
+// it. `start`/`end` mark the argument's content atom range.
+interface AccentGroup {
+  start: number
+  end: number
+  constructOffset: number
+  command: string
+}
+
+function accentGroupAtOffset(mf: MathfieldElement, offset: number): AccentGroup | null {
+  const latex = mf.getElementInfo(offset)?.latex
+  if (!latex || !isAccentConstructLatex(latex)) {
+    return null
+  }
+  const command = latex.match(/^\\([a-zA-Z]+)\{/)?.[1] ?? ''
+  const isBrace = command === 'overbrace' || command === 'underbrace'
+  // Collect the contiguous non-empty atom runs walking backward from just
+  // before the construct. For overbrace/underbrace the run closest to the
+  // construct is the script (`^{...}`/`_{...}`), so the argument is the run
+  // before it; for every other accent there is only one run.
+  const runs: [number, number][] = []
+  let i = offset - 1
+  while (i >= 0) {
+    if ((mf.getElementInfo(i)?.latex ?? '') !== '') {
+      const end = i
+      while (i >= 0 && (mf.getElementInfo(i)?.latex ?? '') !== '') {
+        i--
+      }
+      runs.push([i + 1, end])
+    } else {
+      i--
+    }
+  }
+  const range = isBrace && runs.length >= 2 ? runs[1]! : runs[0]
+  if (!range) {
+    return null
+  }
+  return { start: range[0], end: range[1], constructOffset: offset, command }
+}
+
+function accentBoundsAt(
+  mf: MathfieldElement,
+  group: AccentGroup,
+): { left: number; right: number; top: number; bottom: number } | null {
+  let bounds: { left: number; right: number; top: number; bottom: number } | null = null
+  const merge = (b: { left: number; right: number; top: number; bottom: number } | undefined) => {
+    if (!b) {
+      return
+    }
+    if (!bounds) {
+      bounds = { left: b.left, right: b.right, top: b.top, bottom: b.bottom }
+      return
+    }
+    bounds.left = Math.min(bounds.left, b.left)
+    bounds.right = Math.max(bounds.right, b.right)
+    bounds.top = Math.min(bounds.top, b.top)
+    bounds.bottom = Math.max(bounds.bottom, b.bottom)
+  }
+  merge(mf.getElementInfo(group.constructOffset)?.bounds)
+  for (let offset = group.start; offset <= group.end; offset++) {
+    merge(mf.getElementInfo(offset)?.bounds)
+  }
+  if (group.command === 'overbrace' || group.command === 'underbrace') {
+    // Include the script run so clicking the brace annotation also re-enters.
+    for (let offset = group.constructOffset - 1; offset > group.end; offset--) {
+      merge(mf.getElementInfo(offset)?.bounds)
+    }
+  }
+  return bounds
+}
+
+function accentAtPoint(mf: MathfieldElement, x: number, y: number): AccentGroup | null {
+  for (let offset = 0; offset <= mf.lastOffset; offset++) {
+    const group = accentGroupAtOffset(mf, offset)
+    if (!group) {
+      continue
+    }
+    const bounds = accentBoundsAt(mf, group)
+    if (
+      bounds &&
+      x >= bounds.left - 2 &&
+      x <= bounds.right + 2 &&
+      y >= bounds.top - 4 &&
+      y <= bounds.bottom + 4
+    ) {
+      return group
+    }
+  }
+  return null
+}
+
+// The accent whose argument content atoms cover the given model offset.
+function accentGroupAtAtom(mf: MathfieldElement, atom: number): AccentGroup | null {
+  for (let offset = 0; offset <= mf.lastOffset; offset++) {
+    const group = accentGroupAtOffset(mf, offset)
+    if (group && atom >= group.start && atom <= group.end) {
+      return group
+    }
+  }
+  return null
+}
+
+// The accent whose argument currently contains the caret (the caret sits inside
+// the argument's content, between the branch start and the construct atom).
+function accentGroupAtCaret(mf: MathfieldElement): AccentGroup | null {
+  const pos = mf.position
+  for (let offset = 0; offset <= mf.lastOffset; offset++) {
+    const group = accentGroupAtOffset(mf, offset)
+    if (group && pos >= group.start - 1 && pos <= group.end) {
+      return group
+    }
+  }
+  return null
+}
+
+// An accent whose argument is still the empty placeholder is handled by the
+// placeholder click path (placeholderAtPoint -> enterPlaceholder), which selects
+// the placeholder; the accent path below only re-enters filled arguments.
+function isAccentArgEmpty(mf: MathfieldElement, group: AccentGroup): boolean {
+  return (
+    group.start === group.end &&
+    PLACEHOLDER_LATEX_RE.test(mf.getElementInfo(group.start)?.latex ?? '')
+  )
+}
+
+function reenterAccent(mf: MathfieldElement, group: AccentGroup): void {
+  if (document.activeElement !== mf) {
+    mf.focus()
+    if (document.activeElement !== mf) {
+      const keyboardSink = mf.shadowRoot?.querySelector<HTMLElement>('.ML__keyboard-sink')
+      keyboardSink?.focus()
+    }
+  }
+  mf.position = Math.min(group.end, mf.lastOffset)
+  onSelectionChange()
+}
+
+// MathLive treats an accent construct as opaque to arrow navigation: a single
+// ArrowLeft/ArrowRight skips the whole argument instead of stepping through it.
+// Step the caret one position at a time across the accent's extent (the branch
+// start immediately before the argument through the atom just after it) so the
+// argument is navigable like a Text box.
+function accentArrowTarget(mf: MathfieldElement, key: 'ArrowLeft' | 'ArrowRight'): number | null {
+  if (!mf.selectionIsCollapsed) {
+    return null
+  }
+  const pos = mf.position
+  for (let offset = 0; offset <= mf.lastOffset; offset++) {
+    const group = accentGroupAtOffset(mf, offset)
+    if (!group) {
+      continue
+    }
+    const before = group.start - 2
+    const after = group.end + 1
+    if (isAccentArgEmpty(mf, group)) {
+      // The empty accent's interior is just the placeholder; a single arrow
+      // press from either side selects it.
+      if (key === 'ArrowRight' && pos === before) {
+        return group.start
+      }
+      if (key === 'ArrowLeft' && pos === after) {
+        return group.start
+      }
+      continue
+    }
+    if (key === 'ArrowRight' && pos >= before && pos < after) {
+      return Math.max(before, Math.min(after, pos + 1))
+    }
+    if (key === 'ArrowLeft' && pos > before && pos <= after) {
+      return Math.max(before, Math.min(after, pos - 1))
+    }
+  }
+  return null
+}
+
 function onMfPointerDown(event: PointerEvent) {
   const mf = getMf()
   if (!mf) {
@@ -1900,6 +2144,19 @@ function onMfPointerDown(event: PointerEvent) {
     mf.position = Math.min(emptyGroup.start, mf.lastOffset)
     caretArrivedByNavigation = false
     onSelectionChange()
+    return
+  }
+  // Clicking a filled accent (or the accent glyph over it): MathLive maps the
+  // click to either side of the opaque construct, so take over the click and
+  // park the caret inside the argument (at its end) instead.
+  const accent = accentAtPoint(mf, event.clientX, event.clientY)
+  if (accent && !isAccentArgEmpty(mf, accent)) {
+    event.preventDefault()
+    if (document.activeElement !== mf) {
+      mf.blur()
+    }
+    reenterAccent(mf, accent)
+    caretArrivedByNavigation = false
     return
   }
   let contentRight = -Infinity
@@ -1958,6 +2215,25 @@ function onPointerUp(event: PointerEvent) {
       mf.position = Math.min(group.start, mf.lastOffset)
       syncCaretInText()
       scheduleUpdateTextHints()
+    })
+    return
+  }
+  // Clicking a filled accent: re-apply the caret inside its argument after
+  // MathLive's click handling settles (it may still move the caret to either
+  // side of the opaque construct).
+  const accent = accentAtPoint(mf, event.clientX, event.clientY)
+  if (accent && !isAccentArgEmpty(mf, accent)) {
+    const x = event.clientX
+    const y = event.clientY
+    requestAnimationFrame(() => {
+      if (disposed || getMf() !== mf) {
+        return
+      }
+      const group = accentAtPoint(mf, x, y)
+      if (!group || isAccentArgEmpty(mf, group)) {
+        return
+      }
+      reenterAccent(mf, group)
     })
     return
   }

@@ -1347,12 +1347,160 @@ test('clicking an accent placeholder focuses it and accepts input', async ({ pag
   await expect(textarea).toHaveValue(/\\bar\{y\}/, { timeout: 10000 })
 })
 
+test('clicking a filled accent re-enters it so it can be edited again', async ({ page, goto }) => {
+  await goto('/', { waitUntil: 'hydration' })
+  await insertElement(page, 'Hat', 'Accents')
+  const textarea = page.locator('.latex-textarea')
+  const field = page.locator('math-field')
+  await expect(textarea).toHaveValue(/\\hat/, { timeout: 10000 })
+  await page.keyboard.type('x')
+  await expect(textarea).toHaveValue(/\\hat\{x\}/, { timeout: 10000 })
+  // Move the caret out of the accent, then click back on its content. The
+  // accent glyph overlays the content (which is why MathLive's own click
+  // handling misses it), so force the click past the overlay.
+  await page.keyboard.press('ArrowRight')
+  await field.locator('text=x').filter({ visible: true }).first().click({ force: true })
+  await page.keyboard.type('y')
+  await expect(textarea).toHaveValue(/\\hat\{xy\}/, { timeout: 10000 })
+})
+
+test('arrow keys navigate into and through an accent argument', async ({ page, goto }) => {
+  await goto('/', { waitUntil: 'hydration' })
+  await insertElement(page, 'Hat', 'Accents')
+  const textarea = page.locator('.latex-textarea')
+  await expect(textarea).toHaveValue(/\\hat/, { timeout: 10000 })
+  await page.keyboard.type('xy')
+  await expect(textarea).toHaveValue(/\\hat\{xy\}/, { timeout: 10000 })
+  // Leave the accent, arrow back into it (right before the last character),
+  // then append so the caret placement is observable.
+  await page.keyboard.press('ArrowRight')
+  await page.keyboard.press('ArrowLeft')
+  await page.keyboard.press('ArrowLeft')
+  await page.keyboard.type('z')
+  await expect(textarea).toHaveValue(/\\hat\{xzy\}/, { timeout: 10000 })
+})
+
+test('backspace and delete edit the accent argument without removing it', async ({ page, goto }) => {
+  await goto('/', { waitUntil: 'hydration' })
+  await insertElement(page, 'Hat', 'Accents')
+  const textarea = page.locator('.latex-textarea')
+  await expect(textarea).toHaveValue(/\\hat/, { timeout: 10000 })
+  await page.keyboard.type('xy')
+  await expect(textarea).toHaveValue(/\\hat\{xy\}/, { timeout: 10000 })
+  // Backspace removes the last character only.
+  await page.keyboard.press('Backspace')
+  await expect(textarea).toHaveValue(/\\hat\{x\}/, { timeout: 10000 })
+  // Delete removes the character before the caret after stepping left.
+  await page.keyboard.press('ArrowLeft')
+  await page.keyboard.press('Delete')
+  await expect(textarea).toHaveValue(/\\hat\{\}/, { timeout: 10000 })
+  // The emptied accent keeps an editable placeholder.
+  await page.keyboard.type('w')
+  await expect(textarea).toHaveValue(/\\hat\{w\}/, { timeout: 10000 })
+})
+
+test('a filled accent highlights its argument while the caret is inside', async ({ page, goto }) => {
+  await goto('/', { waitUntil: 'hydration' })
+  await insertElement(page, 'Hat', 'Accents')
+  const textarea = page.locator('.latex-textarea')
+  await expect(textarea).toHaveValue(/\\hat/, { timeout: 10000 })
+  await page.keyboard.type('xy')
+  await expect(textarea).toHaveValue(/\\hat\{xy\}/, { timeout: 10000 })
+  await expect(page.locator('.caret-text-hl')).toBeVisible()
+  await page.keyboard.press('ArrowRight')
+  await expect(page.locator('.caret-text-hl')).toHaveCount(0)
+})
+
 test('palette ellipsis icon renders the symbol without errors', async ({ page, goto }) => {
   await goto('/', { waitUntil: 'hydration' })
   await expandCategory(page, 'Basic')
   const chip = page.getByRole('button', { name: 'Insert Ellipsis' })
   await expect(chip).toContainText('…', { timeout: 15000 })
   await expect(chip.locator('.ML__error')).toHaveCount(0)
+})
+
+test('fixed-width accents stay centered over multi-character content', async ({ page, goto }) => {
+  await goto('/', { waitUntil: 'hydration' })
+  await insertElement(page, 'Hat', 'Accents')
+  const field = page.locator('math-field')
+  const textarea = page.locator('.latex-textarea')
+  await page.keyboard.type('abc')
+  await expect(textarea).toHaveValue(/\\hat\{abc\}/, { timeout: 10000 })
+  await page.waitForTimeout(150)
+  // The accent glyph must be horizontally centered over its content. MathLive
+  // anchors the fixed glyph at the content center, drifting it right for
+  // multi-character content; the render fix re-centers it.
+  const error = await field.evaluate((el) => {
+    const root = (el as unknown as { shadowRoot: ShadowRoot | null }).shadowRoot
+    const vlist = root?.querySelector('.ML__vlist')
+    const body = root?.querySelector('.ML__accent-body')
+    if (!vlist || !body) {
+      return Infinity
+    }
+    const vr = vlist.getBoundingClientRect()
+    const br = body.getBoundingClientRect()
+    return Math.abs((br.left + br.right) / 2 - (vr.left + vr.right) / 2)
+  })
+  expect(error).toBeLessThan(1)
+})
+
+test('wide accents span the full content instead of starting at the middle', async ({ page, goto }) => {
+  await goto('/', { waitUntil: 'hydration' })
+  await insertElement(page, 'Wide hat', 'Accents')
+  const field = page.locator('math-field')
+  const textarea = page.locator('.latex-textarea')
+  await page.keyboard.type('xy')
+  await expect(textarea).toHaveValue(/\\widehat\{xy\}/, { timeout: 10000 })
+  await page.waitForTimeout(150)
+  const span = await field.evaluate((el) => {
+    const root = (el as unknown as { shadowRoot: ShadowRoot | null }).shadowRoot
+    const stretchy = root?.querySelector('.ML__stretchy')
+    const vlist = root?.querySelector('.ML__vlist')
+    if (!stretchy || !vlist) {
+      return null
+    }
+    const sr = stretchy.getBoundingClientRect()
+    const vr = vlist.getBoundingClientRect()
+    return { left: sr.left - vr.left, right: vr.right - sr.right }
+  })
+  expect(span).not.toBeNull()
+  // The stretchy glyph must start at the content's left edge and end at its
+  // right edge (no half-width glyph anchored at the middle).
+  expect(Math.abs(span!.left)).toBeLessThan(1)
+  expect(Math.abs(span!.right)).toBeLessThan(1)
+})
+
+test('wide accents cap at the font size and stay centered over long content', async ({ page, goto }) => {
+  await goto('/', { waitUntil: 'hydration' })
+  await insertElement(page, 'Wide hat', 'Accents')
+  const field = page.locator('math-field')
+  const textarea = page.locator('.latex-textarea')
+  await page.keyboard.type('abcdefgh')
+  await expect(textarea).toHaveValue(/\\widehat\{abcdefgh\}/, { timeout: 10000 })
+  await page.waitForTimeout(150)
+  const measure = await field.evaluate((el) => {
+    const root = (el as unknown as { shadowRoot: ShadowRoot | null }).shadowRoot
+    const stretchy = root?.querySelector('.ML__stretchy')
+    const vlist = root?.querySelector('.ML__vlist')
+    const svg = root?.querySelector('.ML__stretchy svg')
+    if (!stretchy || !vlist) {
+      return null
+    }
+    const sr = stretchy.getBoundingClientRect()
+    const vr = vlist.getBoundingClientRect()
+    return {
+      width: sr.width,
+      contentWidth: vr.width,
+      centerError: (sr.left + sr.right) / 2 - (vr.left + vr.right) / 2,
+      viewBox: svg?.getAttribute('viewBox'),
+    }
+  })
+  expect(measure).not.toBeNull()
+  // Long content: the glyph caps below the content width and is centered, and it
+  // uses the wide glyph variant rather than the flattened narrow one.
+  expect(measure!.width).toBeLessThan(measure!.contentWidth)
+  expect(Math.abs(measure!.centerError)).toBeLessThan(1)
+  expect(measure!.viewBox).toMatch(/^0 0 23(64|39)/)
 })
 
 test('drag preview reflects the drop position', async ({ page, goto }) => {
