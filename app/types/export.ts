@@ -46,5 +46,5 @@ export const DEFAULT_EXPORT_SETTINGS: ExportSettings = {
   padding: 8,
   scale: 1,
   jpegQuality: 90,
-  displayStyle: false,
+  displayStyle: true,
 }

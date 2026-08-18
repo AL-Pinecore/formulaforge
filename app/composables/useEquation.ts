@@ -5,6 +5,7 @@ const errors = ref<string[]>([])
 const canUndo = ref(false)
 const canRedo = ref(false)
 const fontSize = ref(24)
+const displayStyle = ref(true)
 
 export function useEquation() {
   return {
@@ -13,6 +14,7 @@ export function useEquation() {
     canUndo,
     canRedo,
     fontSize,
+    displayStyle,
     setState(value: string, fieldErrors: string[]) {
       latex.value = value
       errors.value = fieldErrors
@@ -23,6 +25,9 @@ export function useEquation() {
     },
     setFontSize(px: number) {
       fontSize.value = px
+    },
+    setDisplayStyle(value: boolean) {
+      displayStyle.value = value
     },
   }
 }

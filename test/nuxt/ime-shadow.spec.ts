@@ -6,6 +6,7 @@ class FakeMathField extends HTMLElement {
   value = ''
   placeholder = ''
   mathVirtualKeyboardPolicy = 'auto'
+  defaultMode = 'math'
   inserted: string[] = []
   private listeners = new Map<string, EventListener>()
 
@@ -59,8 +60,8 @@ describe('EquationWorkspace IME blocking (shadow root)', () => {
     }
   })
 
-  async function mountConfigured() {
-    const wrapper = mount(EquationWorkspace, { props: { fontSize: 24 } })
+  async function mountConfigured(props: Record<string, unknown> = {}) {
+    const wrapper = mount(EquationWorkspace, { props: { fontSize: 24, ...props } })
     await vi.waitFor(() => {
       expect(wrapper.emitted('latex-change')).toBeTruthy()
     })
@@ -99,5 +100,13 @@ describe('EquationWorkspace IME blocking (shadow root)', () => {
 
     const fake = field.element as FakeMathField
     expect(fake.inserted).toContain('n')
+  })
+
+  it('sets the mathfield default mode from the displayStyle prop', async () => {
+    const inline = await mountConfigured({ displayStyle: false })
+    expect((inline.find('math-field').element as FakeMathField).defaultMode).toBe('inline-math')
+
+    const display = await mountConfigured({ displayStyle: true })
+    expect((display.find('math-field').element as FakeMathField).defaultMode).toBe('math')
   })
 })

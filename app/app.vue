@@ -85,6 +85,7 @@ async function onCopy(kind: 'raw' | 'inline' | 'display') {
       <EquationWorkspace
         ref="workspace"
         :font-size="eq.fontSize.value"
+        :display-style="eq.displayStyle.value"
         @latex-change="onLatexChange"
         @undo-state="onUndoState"
         @toast="showToast"

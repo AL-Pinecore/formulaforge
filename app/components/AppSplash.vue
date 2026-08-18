@@ -5,8 +5,8 @@ const ICON_SIZE = 100
 const GAP = 30
 
 const ICON_FADE_MS = 200
-const HOLD_MS = 200
-const ANIMATION_MS = 600
+const HOLD_MS = 400
+const ANIMATION_MS = 800
 const SHRINK_DELAY_MS = 0
 const FADE_DELAY_MS = 400
 const FADE_MS = 400
@@ -14,7 +14,7 @@ const FADE_MS = 400
 const INITIAL_ICON_SCALE = 2
 const TITLE_INITIAL_SCALE = 0.55
 
-const EASE_OUT_EXPO = 'cubic-bezier(0.16, 1, 0.3, 1)'
+const EASE_FUN = 'cubic-bezier(0.65, 0, 0.35, 1)'
 
 const isTestEnv =
     import.meta.env.MODE === 'test' ||
@@ -41,7 +41,7 @@ const iconMoverStyle = computed(() => ({
       ? `translate(-50%, -50%) translateX(${iconShift.value}px)`
       : 'translate(-50%, -50%)',
   transition: moving.value
-      ? `opacity ${ICON_FADE_MS}ms ease-out, transform ${ANIMATION_MS}ms ${EASE_OUT_EXPO}`
+      ? `opacity ${ICON_FADE_MS}ms ease-out, transform ${ANIMATION_MS}ms ${EASE_FUN}`
       : `opacity ${ICON_FADE_MS}ms ease-out`,
 }))
 
@@ -50,7 +50,7 @@ const iconStyle = computed(() => ({
       ? 'scale(1)'
       : `scale(${INITIAL_ICON_SCALE})`,
   transition: shrinking.value
-      ? `transform ${ANIMATION_MS - SHRINK_DELAY_MS}ms ${EASE_OUT_EXPO}`
+      ? `transform ${ANIMATION_MS - SHRINK_DELAY_MS}ms ${EASE_FUN}`
       : 'none',
 }))
 
@@ -59,7 +59,7 @@ const nameMoverStyle = computed(() => ({
       ? `translate(-50%, -50%) translateX(${nameShift.value}px)`
       : 'translate(-50%, -50%)',
   transition: moving.value
-      ? `transform ${ANIMATION_MS}ms ${EASE_OUT_EXPO}`
+      ? `transform ${ANIMATION_MS}ms ${EASE_FUN}`
       : 'none',
 }))
 
@@ -69,7 +69,7 @@ const nameStyle = computed(() => ({
       ? 'scale(1)'
       : `scale(${TITLE_INITIAL_SCALE})`,
   transition: moving.value
-      ? `transform ${ANIMATION_MS}ms ${EASE_OUT_EXPO}`
+      ? `transform ${ANIMATION_MS}ms ${EASE_FUN}`
       : 'none',
 }))
 
@@ -124,9 +124,9 @@ onMounted(async () => {
       v-if="!hidden"
       class="splash"
       :class="{
-      'splash--ready': ready,
-      'splash--fading': fading,
-    }"
+        'splash--ready': ready,
+        'splash--fading': fading,
+      }"
       aria-hidden="true"
   >
     <div
@@ -259,6 +259,7 @@ onMounted(async () => {
   letter-spacing: 0.01em;
   white-space: nowrap;
   transform-origin: center;
+  user-select: none;
 }
 
 @media (prefers-reduced-motion: reduce) {

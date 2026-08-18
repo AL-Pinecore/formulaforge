@@ -3,6 +3,7 @@ import { computed, reactive, ref } from 'vue'
 import { DEFAULT_EXPORT_SETTINGS } from '~/types/export'
 import type { ExportFormat, ExportSettings } from '~/types/export'
 import { useEquationExport } from '~/composables/useEquationExport'
+import { useEquation } from '~/composables/useEquation'
 import { useI18n } from '~/composables/useI18n'
 
 const props = defineProps<{ latex: string }>()
@@ -10,6 +11,7 @@ const props = defineProps<{ latex: string }>()
 const emit = defineEmits<{ toast: [message: string, kind: 'success' | 'error'] }>()
 
 const { t } = useI18n()
+const { displayStyle } = useEquation()
 
 const settings = reactive<ExportSettings>({ ...DEFAULT_EXPORT_SETTINGS })
 const { exporting, lastError, exportEquation, formats, formatLabels } = useEquationExport()
@@ -42,10 +44,11 @@ function onFormatKeydown(event: KeyboardEvent, format: ExportFormat) {
 }
 
 const effectiveSettings = computed<ExportSettings>(() => {
-  if (settings.format === 'jpeg' && !settings.background) {
-    return { ...settings, background: '#ffffff' }
+  const base = { ...settings, displayStyle: displayStyle.value }
+  if (base.format === 'jpeg' && !base.background) {
+    return { ...base, background: '#ffffff' }
   }
-  return { ...settings }
+  return base
 })
 
 const backgroundEnabled = computed({
@@ -158,7 +161,7 @@ async function onExport() {
 
     <div class="field">
       <label class="checkbox-row">
-        <input v-model="settings.displayStyle" type="checkbox" />
+        <input v-model="displayStyle" type="checkbox" />
         <span>{{ t('export.displayStyle') }}</span>
       </label>
     </div>

@@ -28,7 +28,9 @@ import { useI18n } from '~/composables/useI18n'
 import { invoke } from '@tauri-apps/api/core'
 import { isTauriRuntime } from '~/composables/useEquationExport'
 
-const props = defineProps<{ fontSize: number }>()
+const props = withDefaults(defineProps<{ fontSize: number; displayStyle?: boolean }>(), {
+  displayStyle: true,
+})
 
 const emit = defineEmits<{
   'latex-change': [value: string, errors: string[]]
@@ -957,6 +959,7 @@ function isAcceptedTextFile(file: File): boolean {
 function configureMathfield(mf: MathfieldElement) {
   mf.placeholder = t('workspace.placeholder')
   mf.mathVirtualKeyboardPolicy = 'manual'
+  mf.defaultMode = props.displayStyle ? 'math' : 'inline-math'
   mf.style.fontSize = `${props.fontSize}px`
   const normalized = addTextBoundaries(mf.value)
   if (normalized !== mf.value) {
@@ -2454,6 +2457,24 @@ function setFontSize(px: number) {
   scheduleUpdateTextHints()
 }
 
+function setDisplayStyle(value: boolean) {
+  const mf = getMf()
+  if (mf) {
+    mf.defaultMode = value ? 'math' : 'inline-math'
+    // MathLive's option setter does not re-render existing content for a
+    // `defaultMode` change alone, so re-parse the current value to apply the
+    // new mathstyle (limits above/below vs. side sub/superscripts). Preserve
+    // the caret position across the round-trip.
+    const position = mf.position
+    mf.setValue(mf.value, { mode: 'math', silenceNotifications: true })
+    mf.position = Math.min(position, mf.lastOffset)
+    scheduleUpdateTextHints()
+  }
+  if (mirrorField) {
+    mirrorField.defaultMode = value ? 'math' : 'inline-math'
+  }
+}
+
 onMounted(() => {
   void ensureMathfield()
 })
@@ -2477,6 +2498,7 @@ onBeforeUnmount(() => {
 })
 
 watch(() => props.fontSize, (px) => setFontSize(px))
+watch(() => props.displayStyle, (value) => setDisplayStyle(value))
 
 defineExpose({
   setLatex,

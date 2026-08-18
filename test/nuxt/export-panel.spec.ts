@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { mount } from '@vue/test-utils'
 import ExportPanel from '~/components/ExportPanel.vue'
+import { useEquation } from '~/composables/useEquation'
 
 vi.mock('@tauri-apps/api/core', () => ({
   invoke: vi.fn(),
@@ -24,6 +25,7 @@ vi.mock('~/utils/browser-export', () => ({
 describe('ExportPanel', () => {
   beforeEach(() => {
     delete (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__
+    useEquation().setDisplayStyle(true)
   })
 
   it('defaults to PNG with all formats enabled', async () => {
@@ -44,5 +46,15 @@ describe('ExportPanel', () => {
     const wrapper = await mount(ExportPanel, { props: { latex: 'x' } })
     await wrapper.find('button[data-format="svg"]').trigger('keydown', { key: 'ArrowLeft' })
     expect(wrapper.find('button[data-format="pdf"]').attributes('aria-checked')).toBe('true')
+  })
+
+  it('syncs the display style checkbox with the shared state', async () => {
+    const wrapper = await mount(ExportPanel, { props: { latex: 'x' } })
+    const checkboxes = wrapper.findAll('input[type="checkbox"]')
+    const displayStyleInput = checkboxes[1]!
+    expect((displayStyleInput.element as HTMLInputElement).checked).toBe(true)
+
+    await displayStyleInput.setValue(false)
+    expect(useEquation().displayStyle.value).toBe(false)
   })
 })

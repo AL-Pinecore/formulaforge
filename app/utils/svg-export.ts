@@ -87,6 +87,14 @@ export function composeStandaloneSvg(params: {
   return { svg, width, height }
 }
 
+export function applyMathstyle(latex: string, display?: boolean): string {
+  // `display: false` requests inline style (limits as side sub/superscripts).
+  // MathJax 4's SVG output line-breaks inline math (display: false) at every
+  // operator, yielding multiple <svg> elements, so keep `display: true` and
+  // switch the style with a `\textstyle` declaration instead.
+  return display === false ? `\\textstyle ${latex}` : latex
+}
+
 export async function renderEquationSvg(
   latex: string,
   options: EquationRenderOptions = {},
@@ -98,11 +106,12 @@ export async function renderEquationSvg(
   const background = options.background ? sanitizeColor(options.background) : null
   const ex = EX_PIXELS
 
-  const node = await MathJax.tex2svgPromise(latex, {
+  const node = await MathJax.tex2svgPromise(applyMathstyle(latex, options.display), {
     // Always render in display mode: MathJax 4's SVG output line-breaks inline
     // math (display: false) at every operator regardless of the linebreaks /
     // containerWidth options, yielding multiple <svg> elements (one per line).
-    // Display mode produces a single <svg> with the whole equation.
+    // Display mode produces a single <svg> with the whole equation; the inline
+    // style is applied via `\textstyle` in `applyMathstyle` instead.
     display: true,
     em: 16,
     ex,

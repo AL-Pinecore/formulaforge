@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  applyMathstyle,
   composeStandaloneSvg,
   parseExSize,
   sanitizeColor,
@@ -87,6 +88,18 @@ describe('composeStandaloneSvg', () => {
     })
     expect(result.width).toBe(10)
     expect(result.svg).toContain('width="10" height="5"')
+  })
+})
+
+describe('applyMathstyle', () => {
+  it('keeps display-style latex unchanged', () => {
+    expect(applyMathstyle('\\sum_{i=1}^n i', true)).toBe('\\sum_{i=1}^n i')
+    expect(applyMathstyle('x+y')).toBe('x+y')
+    expect(applyMathstyle('x+y', undefined)).toBe('x+y')
+  })
+
+  it('wraps inline style with textstyle', () => {
+    expect(applyMathstyle('\\sum_{i=1}^n i', false)).toBe('\\textstyle \\sum_{i=1}^n i')
   })
 })
 
