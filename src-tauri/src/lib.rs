@@ -1,4 +1,5 @@
 mod export;
+mod ime;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -7,7 +8,9 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             export::export_equation_approved,
             export::save_text_file_approved,
-            export::read_text_file_approved
+            export::read_text_file_approved,
+            ime::force_ascii_ime,
+            ime::restore_ime
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

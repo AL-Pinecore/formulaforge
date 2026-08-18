@@ -25,6 +25,8 @@ import {
 } from '~/utils/text-boundary'
 import type { EquationElement } from '~/types/equation'
 import { useI18n } from '~/composables/useI18n'
+import { invoke } from '@tauri-apps/api/core'
+import { isTauriRuntime } from '~/composables/useEquationExport'
 
 const props = defineProps<{ fontSize: number }>()
 
@@ -896,6 +898,39 @@ function onUndoStateChange(mf: MathfieldElement) {
   scheduleUpdateTextHints()
 }
 
+// While the math field is focused, force the English (ASCII-capable) input
+// source so a non-Latin IME never activates and pops its candidate window.
+// This is a macOS-only native switch; on other platforms the command is a no-op
+// and the JS composition blocking handles it. The switch is scoped to the math
+// field's focus/blur, leaving every other input (e.g. the LaTeX source
+// textarea) with its original input-method behavior.
+let englishImeRequestPending = false
+
+async function requestEnglishIme() {
+  if (!isTauriRuntime() || englishImeRequestPending) {
+    return
+  }
+  englishImeRequestPending = true
+  try {
+    await invoke('force_ascii_ime')
+  } catch {
+    // Best-effort: the JS layer still blocks IME text if the switch fails.
+  } finally {
+    englishImeRequestPending = false
+  }
+}
+
+async function restoreImeAfterBlur() {
+  if (!isTauriRuntime()) {
+    return
+  }
+  try {
+    await invoke('restore_ime')
+  } catch {
+    // Ignore: nothing to restore or the runtime has gone away.
+  }
+}
+
 function hasDragPayload(event: DragEvent): boolean {
   const types = event.dataTransfer?.types
   const typeList = types ? Array.from(types) : []
@@ -1485,6 +1520,10 @@ function hasNonAsciiText(data: string | null | undefined): boolean {
 }
 
 function onMfKeydown(event: KeyboardEvent) {
+  // Re-assert the English input source on every key press so a manual switch
+  // back to a non-Latin IME (e.g. Cmd+Space) while the field is focused is
+  // reverted immediately instead of popping the candidate window.
+  void requestEnglishIme()
   // During IME composition the browser emits keydown events that carry the
   // composition state (`key === 'Process'` or `keyCode 229`); WKWebView even
   // reports `isComposing: false` there but still exposes the physical key in
@@ -2500,8 +2539,8 @@ defineExpose({
           @compositionend.capture="onCompositionEnd"
           @pointerdown.capture="onMfPointerDown"
           @undo-state-change="onUndoStateChange($event.target as unknown as MathfieldElement)"
-          @focus="syncPlaceholderSelected(); syncCaretInText(); scheduleUpdateTextHints()"
-          @blur="syncPlaceholderSelected(); syncCaretInText(); scheduleUpdateTextHints()"
+          @focus="requestEnglishIme(); syncPlaceholderSelected(); syncCaretInText(); scheduleUpdateTextHints()"
+          @blur="restoreImeAfterBlur(); syncPlaceholderSelected(); syncCaretInText(); scheduleUpdateTextHints()"
           @focusin="syncCaretInText(); scheduleUpdateTextHints()"
           @focusout="syncCaretInText(); scheduleUpdateTextHints()"
           @selection-change="onSelectionChange"
