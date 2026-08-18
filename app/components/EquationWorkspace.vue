@@ -73,10 +73,6 @@ let dragPlaceholderIndex = -1
 let dragApplyFont = false
 let dragX = -1
 let dragY = -1
-let imeComposing = false
-let imeSuppressed = false
-let imeEmptyTextCompose = false
-let imeCompositionData = ''
 
 // MathLive's getOffsetFromPoint is unreliable with sub/superscripts and groups:
 // it returns 0 (the start of the formula) for many positions, which makes the
@@ -934,6 +930,7 @@ function configureMathfield(mf: MathfieldElement) {
   ensurePlaceholderSupport(mf)
   ensureAccentPositioning(mf)
   observeFractionRendering(mf)
+  attachImeBlocker(mf)
   publishState(mf)
 }
 
@@ -1481,12 +1478,36 @@ let caretArrivedByNavigation = false
 // `selection-change` disambiguates which side the caret reached.
 let lastArrowDirection: 'left' | 'right' | null = null
 
+const NON_ASCII_RE = /[^\x00-\x7F]/
+
+function hasNonAsciiText(data: string | null | undefined): boolean {
+  return typeof data === 'string' && data.length > 0 && NON_ASCII_RE.test(data)
+}
+
 function onMfKeydown(event: KeyboardEvent) {
   // During IME composition the browser emits keydown events that carry the
-  // composition state (`isComposing`, `key === 'Process'` or `keyCode 229`).
-  // MathLive handles the composition natively; intercepting these keys here
-  // would rebuild `\text{...}` groups mid-composition and corrupt the input.
+  // composition state (`key === 'Process'` or `keyCode 229`); WKWebView even
+  // reports `isComposing: false` there but still exposes the physical key in
+  // `key`/`code`. MathLive handles composition natively, so intercepting these
+  // keys to rebuild `\text{...}` groups mid-composition would corrupt input.
+  // Instead, recover printable letters typed under a non-Latin IME so the field
+  // keeps working as English-only input.
   if (event.isComposing || event.key === 'Process' || event.keyCode === 229) {
+    if (/^[a-zA-Z]$/.test(event.key)) {
+      event.preventDefault()
+      event.stopPropagation()
+      const mf = getMf()
+      if (mf) {
+        mf.insert(event.key, {
+          insertionMode: 'replaceSelection',
+          format: 'auto',
+          mode: 'math',
+          silenceNotifications: true,
+        })
+        publishState(mf)
+        scheduleUpdateTextHints()
+      }
+    }
     return
   }
   const isArrowKey = event.key === 'ArrowLeft' || event.key === 'ArrowRight'
@@ -1514,99 +1535,59 @@ function onMfKeydown(event: KeyboardEvent) {
   }
 }
 
-// IME composition starts on MathLive's contenteditable keyboard sink (inside
-// its shadow DOM) and bubbles to the host as a composed event. We intercept it
-// in the capture phase:
-//  - Outside a Text box, `stopPropagation` keeps MathLive's own
-//    `compositionstart` handler from running (and its `input` handler already
-//    discards `insertCompositionText`), so no Chinese text is inserted in math
-//    mode.
-//  - Inside a filled Text box, the event is left untouched so MathLive's native
-//    composition handling runs.
-//  - Inside an EMPTY Text box (whose content is the invisible `\phantom{Text}`
-//    sentinel) the caret sits on the box's branch-start atom in math mode, so
-//    MathLive's native composition would fold the composed text into the
-//    phantom. We block it and reinsert the final text ourselves using the same
-//    `\text{...}` rebuild as ordinary typing.
+// IME composition is blocked entirely: the math field is English-only, so
+// Chinese/Japanese/Korean and other scripts must never enter the model.
+function blockImeEvent(event: Event) {
+  event.preventDefault()
+  event.stopPropagation()
+  event.stopImmediatePropagation()
+}
+
 function onCompositionStart(event: CompositionEvent) {
-  const mf = getMf()
-  if (!mf) {
-    return
-  }
-  imeComposing = true
-  const group = textGroupAtCaret(mf)
-  if (!group) {
-    imeSuppressed = true
-    event.stopPropagation()
-    return
-  }
-  imeSuppressed = false
-  if (isEmptyTextLatex(group.latex)) {
-    imeEmptyTextCompose = true
-    imeCompositionData = ''
-    event.stopPropagation()
-  }
+  blockImeEvent(event)
 }
 
 function onCompositionUpdate(event: CompositionEvent) {
-  if (imeEmptyTextCompose) {
-    imeCompositionData = event.data ?? ''
-  }
+  blockImeEvent(event)
 }
 
 function onCompositionEnd(event: CompositionEvent) {
-  const wasSuppressed = imeSuppressed
-  const wasEmptyCompose = imeEmptyTextCompose
-  imeComposing = false
-  imeSuppressed = false
-  imeEmptyTextCompose = false
-  if (wasSuppressed) {
-    return
-  }
-  const mf = getMf()
-  if (!mf) {
-    return
-  }
-  if (wasEmptyCompose) {
-    const data = event.data ?? imeCompositionData ?? ''
-    imeCompositionData = ''
-    if (data) {
-      insertCompositionIntoEmptyText(mf, data)
-      return
-    }
-  }
-  // MathLive also fires an `input` event after composition (which runs the
-  // normal normalization pipeline); this pass is idempotent and guarantees the
-  // text model, caret and "Text" hints are re-synced even if the event ordering
-  // differs across WebKit/Chromium.
-  scheduleRestorePlaceholders(mf)
-  syncCaretInText()
-  scheduleUpdateTextHints()
+  blockImeEvent(event)
 }
 
-function insertCompositionIntoEmptyText(mf: MathfieldElement, text: string) {
-  const group = textGroupAtCaret(mf)
-  if (!group || !isEmptyTextLatex(group.latex)) {
-    // The empty box changed underneath us; fall back to the normal sync pass.
-    scheduleRestorePlaceholders(mf)
-    syncCaretInText()
-    scheduleUpdateTextHints()
+function onBeforeInput(event: Event) {
+  const inputEvent = event as InputEvent
+  if (inputEvent.inputType === 'insertCompositionText' || hasNonAsciiText(inputEvent.data)) {
+    blockImeEvent(event)
+  }
+}
+
+// Chromium composes the composition events across the shadow-DOM boundary, so
+// the host-level `@composition*.capture` handlers above catch them and stop
+// MathLive's internal keyboard-sink handler. WKWebView composes them too, but
+// its IME commits the final text through a plain `insertText` `input` event
+// (with non-ASCII `data`) that MathLive does not discard. Attach capture-phase
+// listeners directly to MathLive's shadow root (an ancestor of the keyboard
+// sink) so both the composition events and the committed IME text are blocked
+// before they reach MathLive in every engine.
+function attachImeBlocker(mf: MathfieldElement) {
+  const root = mf.shadowRoot
+  if (!root || typeof root.addEventListener !== 'function') {
     return
   }
-  const escaped = text.replace(/([\\{}#$&^_~%])/g, '\\$1')
-  const groupLatex = `\\${group.command}{${escaped}}`
-  mf.selection = { ranges: [[group.start, group.end]] }
-  mf.insert(groupLatex, {
-    insertionMode: 'replaceSelection',
-    mode: 'math',
-    format: 'latex',
-    silenceNotifications: true,
-  })
-  normalizeTextModel(mf)
-  placeCaretInTextGroup(mf, groupLatex, Math.max(0, escaped.length - 1))
-  publishState(mf)
-  syncCaretInText()
-  scheduleUpdateTextHints()
+  root.addEventListener('compositionstart', blockImeEvent, true)
+  root.addEventListener('compositionupdate', blockImeEvent, true)
+  root.addEventListener('compositionend', blockImeEvent, true)
+  root.addEventListener('beforeinput', onBeforeInput, true)
+  root.addEventListener(
+    'input',
+    (event) => {
+      if (hasNonAsciiText((event as InputEvent).data)) {
+        blockImeEvent(event)
+      }
+    },
+    true,
+  )
 }
 
 function insertMathChar(mf: MathfieldElement, event: KeyboardEvent): void {
@@ -2506,8 +2487,14 @@ defineExpose({
         <math-field
           class="workspace-field"
           :style="{ fontSize: `${fontSize}px` }"
+          inputmode="latin"
+          lang="en"
+          autocapitalize="none"
+          autocorrect="off"
+          spellcheck="false"
           @input="onMfInput($event.target as unknown as MathfieldElement)"
           @keydown.capture="onMfKeydown"
+          @beforeinput.capture="onBeforeInput"
           @compositionstart.capture="onCompositionStart"
           @compositionupdate.capture="onCompositionUpdate"
           @compositionend.capture="onCompositionEnd"

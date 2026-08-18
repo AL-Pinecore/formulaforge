@@ -4,9 +4,9 @@ import { computed, nextTick, onMounted, ref } from 'vue'
 const ICON_SIZE = 100
 const GAP = 30
 
-const ICON_FADE_MS = 300
-const HOLD_MS = 300
-const ANIMATION_MS = 1000
+const ICON_FADE_MS = 200
+const HOLD_MS = 200
+const ANIMATION_MS = 600
 const SHRINK_DELAY_MS = 0
 const FADE_DELAY_MS = 400
 const FADE_MS = 400
