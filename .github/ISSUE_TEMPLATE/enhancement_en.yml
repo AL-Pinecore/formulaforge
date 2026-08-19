@@ -1,0 +1,66 @@
+name: "✨ Enhancement"
+description: "Suggest a new feature or improvement"
+title: "[Enhancement] "
+labels:
+  - enhancement
+
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for helping improve FormulaForge!
+        Please describe your idea and the problem it would solve.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What problem or limitation are you trying to solve?
+      placeholder: |
+        I'm currently frustrated by...
+        It would be useful if...
+    validations:
+      required: true
+
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed Solution
+      description: Describe how you think this feature should work.
+      placeholder: Describe your proposed solution.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      description: Which part of FormulaForge does this enhancement relate to?
+      options:
+        - Editor
+        - Rendering
+        - Import
+        - Export
+        - User Interface
+        - Keyboard / Input
+        - Settings
+        - Performance
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: additional
+    attributes:
+      label: Additional Context
+      description: |
+        Add mockups, screenshots, examples, or other information. 
+        You can describe which part is this enhancement related with here if you select "Other".
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Checklist
+      options:
+        - label: I have searched existing issues and confirmed this has not already been requested.
+          required: true

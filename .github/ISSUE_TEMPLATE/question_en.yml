@@ -1,0 +1,87 @@
+name: "❓ Question"
+description: "Ask a question about FormulaForge"
+title: "[Question] "
+labels:
+  - question
+
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Have a question about FormulaForge?
+        Please provide enough context for us to understand what you're trying to do.
+
+  - type: textarea
+    id: question
+    attributes:
+      label: Question
+      description: What would you like to know?
+      placeholder: Describe your question.
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: FormulaForge Version
+      description: If relevant, provide the version you're using.
+      placeholder: "e.g. v1.2.0"
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: Platform
+      options:
+        - macOS
+        - Windows
+        - Linux
+        - Web Browser
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: os-version
+    attributes:
+      label: Platform Version
+      description: |
+        Please provide the platform version. If you selected "Other",
+        include the platform name as well.
+      placeholder: e.g. macOS 26 / Windows 11 / Ubuntu 26.04 / FreeBSD 14.1
+    validations:
+      required: true
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Context
+      description: What are you trying to accomplish?
+      placeholder: |
+        I'm trying to...
+        I expected...
+        I'm not sure how to...
+    validations:
+      required: true
+
+  - type: textarea
+    id: attempts
+    attributes:
+      label: What Have You Tried?
+      description: Describe anything you've already tried.
+      placeholder: |
+        I tried...
+        I also checked...
+
+  - type: textarea
+    id: additional
+    attributes:
+      label: Additional Context
+      description: Add screenshots, examples, or other information if needed.
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Checklist
+      options:
+        - label: I have searched the documentation and existing issues before asking this question.
+          required: true

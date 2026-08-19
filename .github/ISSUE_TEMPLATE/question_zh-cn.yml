@@ -1,0 +1,87 @@
+name: "❓ 问题咨询"
+description: "询问有关 FormulaForge 的问题"
+title: "[Question] "
+labels:
+  - question
+
+body:
+  - type: markdown
+    attributes:
+      value: |
+        对 FormulaForge 有疑问？
+        请提供足够的上下文信息，以便我们了解你想要完成什么。
+
+  - type: textarea
+    id: question
+    attributes:
+      label: 问题
+      description: 你想了解什么？
+      placeholder: 请描述你的问题。
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: FormulaForge 版本
+      description: 如果与问题相关，请提供你正在使用的 FormulaForge 版本。
+      placeholder: "例如：v1.2.0"
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: 运行平台
+      options:
+        - macOS
+        - Windows
+        - Linux
+        - 浏览器
+        - 其他
+    validations:
+      required: true
+
+  - type: input
+    id: os-version
+    attributes:
+      label: 运行平台版本
+      description: |
+        请填写你正在使用的运行平台版本。
+        如果你在上方选择了“其他”，请同时填写运行平台名称。
+      placeholder: 例如：macOS 26 / Windows 11 / Ubuntu 26.04 / FreeBSD 14.1
+    validations:
+      required: true
+
+  - type: textarea
+    id: context
+    attributes:
+      label: 背景信息
+      description: 你想要完成什么？
+      placeholder: |
+        我正在尝试……
+        我原本以为……
+        我不确定如何……
+    validations:
+      required: true
+
+  - type: textarea
+    id: attempts
+    attributes:
+      label: 你已经尝试过什么？
+      description: 请描述你已经尝试过的方法。
+      placeholder: |
+        我尝试了……
+        我还查看了……
+
+  - type: textarea
+    id: additional
+    attributes:
+      label: 补充信息
+      description: 如有需要，可以添加截图、示例或其他相关信息。
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: 提交前检查
+      options:
+        - label: 在提出这个问题之前，我已经搜索过相关文档和现有 Issue。
+          required: true
