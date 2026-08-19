@@ -284,3 +284,38 @@ export const EQUATION_ELEMENTS: EquationElement[] = [
 export function getElementById(id: string): EquationElement | undefined {
   return EQUATION_ELEMENTS.find((element) => element.id === id)
 }
+
+// Maps a typed `\command` (e.g. `\frac`, `\pm`) to the palette element that
+// should be inserted when the user completes it. Exact id matches win (so
+// `\sqrt` inserts the square root, not the n-th root); a command shared by
+// several elements with no id match (`\left`, `\begin`) is left unmapped so the
+// native completion still handles it.
+const COMMAND_INDEX: Map<string, string> = buildCommandIndex()
+
+function buildCommandIndex(): Map<string, string> {
+  const count = new Map<string, number>()
+  for (const element of EQUATION_ELEMENTS) {
+    const command = element.latex.match(/^\\([a-zA-Z]+)/)?.[1]
+    if (command) {
+      count.set(command, (count.get(command) ?? 0) + 1)
+    }
+  }
+  const index = new Map<string, string>()
+  for (const element of EQUATION_ELEMENTS) {
+    const command = element.latex.match(/^\\([a-zA-Z]+)/)?.[1]
+    if (!command) {
+      continue
+    }
+    if (element.id === command) {
+      index.set(command, element.id)
+    } else if (!index.has(command) && count.get(command) === 1) {
+      index.set(command, element.id)
+    }
+  }
+  return index
+}
+
+export function getElementByCommand(name: string): EquationElement | undefined {
+  const id = COMMAND_INDEX.get(name)
+  return id ? getElementById(id) : undefined
+}

@@ -51,6 +51,15 @@ mirror 与真实字段共用同一份 MathLive 渲染器，所以预览「像素
 
 MathLive 的 `getOffsetFromPoint` 在上下标/分组下不可靠（很多位置返回 0）。工作区自己实现：`buildOffsetEdges` 遍历每个 offset 的 `getElementInfo(offset).bounds`，用每个原子的左右边缘构建 `OffsetEdge[]`，再按「距点击点最近、深度最大」选择偏移。
 
+### 反斜杠命令输入
+
+在 `<math-field>` 里直接输入 `\` + 命令名（例如 `\mathrm`、`\frac`、`\alpha`），MathLive 会弹出补全建议。按 `Enter` / `Tab` 完成时，工作区不采用 MathLive 原生的裸 `\command{□}` 补全，而是插入面板里对应的完整元素模板（含 `#0`/`#?` 占位符）。
+
+- `handleKeydown` 在 `latex` 模式下拦截 `Enter`/`Tab`，走 `completeCommand`。
+- 命令名从 MathLive 内部的 `latexgroup` 原子读取（`typedCommandName`）——补全进行中 `mf.value` 序列化为空串，取不到命令。
+- 命令 → 元素的映射在 `equation-elements.ts` 的 `getElementByCommand`：id 与命令名一致的元素优先（`\sqrt` → 平方根而非 n 次方根）；命令被多个元素共享且没有 id 匹配的（`\left`、`\begin`）不映射，交给原生补全。
+- 完成时先 `executeCommand(['complete', 'reject'])` 丢弃正在输入的命令、切回 math 模式，再复用 `insertElement` 插入——与拖拽完全一致（文本命令会得到空文本盒哨兵 + 边界 marker，其余得到占位符）。
+
 ## 设计取舍
 
 - **拖拽用双 MIME 通道**：自定义 MIME 用于应用内，`text/plain` 用于向外兼容，避免元素 id 被外部文本拖入劫持（`onDrop` 只在 payload 声明了自定义 MIME 时才信任 `draggedElementId`）。

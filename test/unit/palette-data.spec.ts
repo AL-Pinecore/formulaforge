@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { EQUATION_ELEMENTS, getElementById } from '../../app/data/equation-elements'
+import { EQUATION_ELEMENTS, getElementByCommand, getElementById } from '../../app/data/equation-elements'
 import { ELEMENT_CATEGORY_ORDER } from '../../app/types/equation'
 
 describe('equation element palette data', () => {
@@ -40,5 +40,22 @@ describe('equation element palette data', () => {
     const first = EQUATION_ELEMENTS[0]!
     expect(getElementById(first.id)).toBe(first)
     expect(getElementById('does-not-exist')).toBeUndefined()
+  })
+
+  it('maps typed commands to the palette element', () => {
+    expect(getElementByCommand('frac')?.id).toBe('frac')
+    expect(getElementByCommand('mathrm')?.id).toBe('mathrm')
+    // Unique aliases where the id differs from the command name.
+    expect(getElementByCommand('pm')?.id).toBe('plus-minus')
+    expect(getElementByCommand('ne')?.id).toBe('not-equal')
+    expect(getElementByCommand('infty')?.id).toBe('infinity')
+    // Collisions prefer the exact-id element.
+    expect(getElementByCommand('sqrt')?.id).toBe('sqrt')
+    expect(getElementByCommand('lim')?.id).toBe('lim')
+    expect(getElementByCommand('mathbb')?.id).toBe('mathbb')
+    // Ambiguous commands without an id match stay unmapped.
+    expect(getElementByCommand('left')).toBeUndefined()
+    expect(getElementByCommand('begin')).toBeUndefined()
+    expect(getElementByCommand('does-not-exist')).toBeUndefined()
   })
 })

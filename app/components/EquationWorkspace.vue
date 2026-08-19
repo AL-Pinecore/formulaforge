@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { MathfieldElement, LatexSyntaxError } from 'mathlive'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { getElementById } from '~/data/equation-elements'
+import { getElementByCommand, getElementById } from '~/data/equation-elements'
 import { DRAG_ELEMENT_MIME, draggedElementId } from '~/utils/drag-payload'
 import { restoreEmptyGroupLatex } from '~/utils/empty-group'
 import { isAccentConstructLatex } from '~/utils/accent'
@@ -1404,6 +1404,46 @@ async function insertLatex(text: string, targetOffset?: number) {
   })
 }
 
+// Completing a typed `\command` inserts the matching palette element (with its
+// full placeholder template) instead of MathLive's bare `\command{□}`. Only the
+// commands that map to a palette element are intercepted; everything else keeps
+// the native completion behavior.
+function completeCommand(mf: MathfieldElement, event: KeyboardEvent): boolean {
+  if (mf.mode !== 'latex') {
+    return false
+  }
+  const name = typedCommandName(mf)
+  const element = name ? getElementByCommand(name) : undefined
+  if (!element) {
+    return false
+  }
+  event.preventDefault()
+  event.stopPropagation()
+  // Discard the in-progress command and switch back to math mode using
+  // MathLive's own completion path, then insert the element like a drag-drop.
+  mf.executeCommand(['complete', 'reject'])
+  void insertElement(element)
+  return true
+}
+
+// The command name being composed in LaTeX mode, read from MathLive's internal
+// `latexgroup` atom (its typed characters — including the greyed suggestion
+// suffix — are not reflected in `mf.value`, which serializes to '' while a
+// command is in progress). This mirrors how MathLive's own `complete` command
+// reads the command, and is the same internal-model access the matrix editing
+// already relies on.
+function typedCommandName(mf: MathfieldElement): string | null {
+  const group = internalModel(mf)?.atoms?.find((atom) => atom.type === 'latexgroup')
+  if (!group?.body) {
+    return null
+  }
+  const command = group.body
+    .filter((atom) => atom.type === 'latex')
+    .map((atom) => atom.value ?? '')
+    .join('')
+  return command.match(/^\\([a-zA-Z]+)/)?.[1] ?? null
+}
+
 const RESTORE_PLACEHOLDER_GLOBAL_RE = /\\placeholder(?:\[[^\]]*\])?\{\}/g
 
 // Re-inject placeholders into emptied groups. Runs as a microtask right after
@@ -1568,6 +1608,8 @@ interface InternalAtom {
   type: string
   parent?: InternalAtom
   parentBranch?: unknown
+  body?: InternalAtom[]
+  value?: string
 }
 
 interface InternalMatrix extends InternalAtom {
@@ -1581,6 +1623,7 @@ interface InternalMatrix extends InternalAtom {
 interface InternalModel {
   at: (position: number) => InternalAtom
   offsetOf: (atom: InternalAtom) => number
+  atoms?: InternalAtom[]
 }
 
 interface MatrixContext {
@@ -1921,6 +1964,15 @@ function handleKeydown(event: KeyboardEvent) {
     return
   }
   if (handleMatrixResizeKey(event, mf)) return
+  if (
+    (event.key === 'Enter' || event.key === 'Tab') &&
+    !event.ctrlKey &&
+    !event.metaKey &&
+    !event.altKey &&
+    !event.shiftKey
+  ) {
+    if (completeCommand(mf, event)) return
+  }
   // Typing into a `\text{...}` box: MathLive collapses a single-atom text
   // command and drops the `\text{}` wrapper, so intercept every printable
   // character in a text context and rebuild the whole text group ourselves.

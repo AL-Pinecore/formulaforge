@@ -51,6 +51,15 @@ The mirror shares MathLive's renderer, so the preview is pixel-identical.
 
 MathLive's `getOffsetFromPoint` is unreliable with sub/superscripts and groups (returns 0 for many positions). The workspace implements its own: `buildOffsetEdges` walks each offset's `getElementInfo(offset).bounds` to build an `OffsetEdge[]`, then picks the offset nearest to the click, preferring greater depth.
 
+### Backslash command input
+
+Typing `\` + a command name directly in the `<math-field>` (e.g. `\mathrm`, `\frac`, `\alpha`) opens MathLive's completion popover. On `Enter` / `Tab`, instead of MathLive's bare `\command{□}` completion, the workspace inserts the matching palette element's full template (with `#0`/`#?` placeholders).
+
+- `handleKeydown` intercepts `Enter`/`Tab` while in `latex` mode, routing to `completeCommand`.
+- The command name is read from MathLive's internal `latexgroup` atom (`typedCommandName`) — during composition `mf.value` serializes to an empty string, so the command can't be read from it.
+- Command → element mapping lives in `equation-elements.ts`'s `getElementByCommand`: elements whose id equals the command name win (`\sqrt` → square root, not the n-th root); commands shared by several elements with no id match (`\left`, `\begin`) stay unmapped and fall through to native completion.
+- On completion it first runs `executeCommand(['complete', 'reject'])` to discard the in-progress command and switch back to math mode, then reuses `insertElement` — identical to drag-and-drop (text commands get the empty text-box sentinel + boundary markers, everything else gets placeholders).
+
 ## Design choices
 
 - **Dual MIME channels for drag**: custom MIME for in-app, `text/plain` for external compatibility; `onDrop` only trusts `draggedElementId` when the payload advertises the custom MIME.

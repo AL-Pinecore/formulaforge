@@ -60,6 +60,35 @@ test('inserts a fraction from the palette into the equation', async ({ page, got
   expect(latex).toContain('\\frac')
 })
 
+test('completes a typed text command into an empty text box', async ({ page, goto }) => {
+  await goto('/', { waitUntil: 'hydration' })
+  await page.locator('math-field').evaluate((el) => (el as { focus(): void }).focus())
+  await page.waitForTimeout(200)
+  await page.keyboard.type('\\mathrm')
+  await page.keyboard.press('Enter')
+  await expect(page.locator('.latex-textarea')).toHaveValue('\\mathrm{}', { timeout: 10000 })
+  await expect(page.locator('.text-hint')).toBeVisible()
+})
+
+test('completes a typed command into a fraction with placeholders', async ({ page, goto }) => {
+  await goto('/', { waitUntil: 'hydration' })
+  await page.locator('math-field').evaluate((el) => (el as { focus(): void }).focus())
+  await page.waitForTimeout(200)
+  await page.keyboard.type('\\frac')
+  await page.keyboard.press('Enter')
+  const latex = await page.locator('.latex-textarea').inputValue()
+  expect(latex).toContain('\\frac')
+})
+
+test('completes a typed symbol command with Tab', async ({ page, goto }) => {
+  await goto('/', { waitUntil: 'hydration' })
+  await page.locator('math-field').evaluate((el) => (el as { focus(): void }).focus())
+  await page.waitForTimeout(200)
+  await page.keyboard.type('\\alpha')
+  await page.keyboard.press('Tab')
+  await expect(page.locator('.latex-textarea')).toHaveValue('\\alpha', { timeout: 10000 })
+})
+
 test('dragging a font style onto a Text box restyles it', async ({ page, goto }) => {
   await goto('/', { waitUntil: 'hydration' })
   await insertElement(page, 'Text', 'Text')
