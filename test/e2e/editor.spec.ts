@@ -931,7 +931,7 @@ test('fraction numerator and denominator painted gaps are symmetric', async ({ p
     { size: 32, latex: '\\frac{x}{y}' },
     { size: 24, latex: '\\frac{\\frac{x}{y}}{z}' },
   ]) {
-    await page.locator('.font-size-select').selectOption(String(size))
+    await page.getByRole('combobox', { name: 'Equation font size' }).selectOption(String(size))
     await textarea.fill(latex)
     await textarea.blur()
     await page.waitForTimeout(300)
