@@ -1,6 +1,6 @@
 # FormulaForge Implementation Docs
 
-Each doc focuses on the implementation mechanics of one feature (files involved, data flow, design choices, known limits). For an overview, environment setup, packaging, and testing, see the [README](../README.md).
+Each doc focuses on the implementation mechanics of one feature (files involved, data flow, design choices, known limits). For an overview, environment setup, packaging, and testing, see the [README](../README.en.md).
 
 ## Table of Contents
 
