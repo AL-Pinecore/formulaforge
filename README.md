@@ -33,6 +33,8 @@
 - **导出**：SVG、PNG、JPEG、WebP、PDF（可选背景色、内边距、分辨率、JPEG 质量、行间显示样式）。
 - **桌面端**：基于 Tauri，文件对话框与图像/PDF 渲染在 Rust 侧完成，无浏览器沙箱限制。
 
+> 各功能的实现细节见 [实现文档](docs/documentation.zh-cn.md)。
+
 ## 技术栈
 
 - **前端**：Nuxt 4 + Vue 3，[MathLive](https://cortexjs.io/mathlive/)（数学输入）、[MathJax](https://www.mathjax.org/)（SVG 渲染）

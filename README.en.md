@@ -30,6 +30,8 @@ Model used: ChatGPT 5.6 Sol, Deepseek V4 Pro
 - **Export**: SVG, PNG, JPEG, WebP, PDF (background color, padding, resolution, JPEG quality, display style).
 - **Desktop**: built with Tauri; file dialogs and image/PDF rendering happen in Rust, with no browser sandbox limits.
 
+> For implementation details of each feature, see the [implementation docs](docs/documentation.en.md).
+
 ## Tech Stack
 
 - **Frontend**: Nuxt 4 + Vue 3, [MathLive](https://cortexjs.io/mathlive/) (math input), [MathJax](https://www.mathjax.org/) (SVG rendering)

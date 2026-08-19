@@ -1,0 +1,63 @@
+# 编辑器与拖拽插入
+
+定位：应用的核心编辑区。左侧面板把公式元素拖进 `<math-field>`，工作区实时渲染、维护状态，并提供一个「像素级一致的插入预览」。
+
+## 涉及文件
+
+- `app/components/EquationWorkspace.vue` — 工作区组件（字段初始化、拖放、预览、状态发布）
+- `app/components/EquationPalette.vue` — 元素面板（分类、搜索、tooltip、拖拽起点）
+- `app/utils/drag-payload.ts` — 拖拽共享状态（`draggedElementId` + MIME 类型）
+- `app/data/equation-elements.ts` — 200+ 个公式元素的定义
+- `app/composables/useEquation.ts` — 全局状态单例
+- `app/types/equation.ts` — 元素类型与分类定义
+
+## 工作机制
+
+### 状态单例 `useEquation`
+
+`useEquation.ts` 在模块层持有 `ref`（`latex` / `errors` / `canUndo` / `canRedo` / `fontSize` / `displayStyle`），`useEquation()` 每次返回同一份引用。所有组件（工作区、工具栏、导出面板）共享同一状态，避免逐层传 props。
+
+工作区通过 `emit('latex-change', value, errors)` 和 `emit('undo-state', ...)` 把字段状态回灌给这个单例。
+
+### `<math-field>` 初始化
+
+`math-field` 是 MathLive 的自定义元素，在 `app/plugins/mathlive.client.ts` 里注册。工作区的初始化走 `ensureMathfield()`：
+
+1. `await customElements.whenDefined('math-field')`；
+2. 轮询最多 20 次、每次 50ms，等 DOM 里的字段就绪（`element.canUndo` 存在）；
+3. `configureMathfield()` 设置 `placeholder`、`mathVirtualKeyboardPolicy`、`defaultMode`、`maxMatrixCols` 等，并注入 placeholder 样式、accent 修正、分数规则、IME 阻断。
+
+### 元素定义与拖拽
+
+`equation-elements.ts` 用 `item()` 工厂生成元素。LaTeX 模板里的占位符约定：
+
+- `#0` — 插入后成为首个选中的 placeholder；
+- `#?` — 后续 placeholder；
+- `#@` — 保留当前选区内容。
+
+拖拽起点在 `EquationPalette.vue` 的 `onDragStart`：把元素 id 写入 `draggedElementId`，同时 `setData(DRAG_ELEMENT_MIME, id)` 和 `setData('text/plain', latex)` 双通道。`text/plain` 是兜底——允许把元素拖到外部编辑器。拖拽图像被设成透明 1px canvas（`transparentDragImage`），因为工作区自己画预览。
+
+### 插入预览（mirror 字段）
+
+插入预览用第二个离屏 `math-field`（`ensureMirrorField`）实现：
+
+1. `updateInsertionPreview` 用 `offsetFromPoint` 算出目标偏移；
+2. `renderPreview` 把 mirror 覆盖到真实字段上方，`mirror.value = mf.value`，再 `mirror.insert(...)`；
+3. MathLive 异步渲染，所以 `schedulePreviewSnapshot` 用 rAF + `setTimeout(32ms)` 双保险等它 settle，再 `snapshotPreview` 抓取 mirror 的 `.ML__latex` DOM 存为静态 HTML 覆盖显示。
+
+mirror 与真实字段共用同一份 MathLive 渲染器，所以预览「像素级一致」。
+
+### 偏移计算 `offsetFromPoint`
+
+MathLive 的 `getOffsetFromPoint` 在上下标/分组下不可靠（很多位置返回 0）。工作区自己实现：`buildOffsetEdges` 遍历每个 offset 的 `getElementInfo(offset).bounds`，用每个原子的左右边缘构建 `OffsetEdge[]`，再按「距点击点最近、深度最大」选择偏移。
+
+## 设计取舍
+
+- **拖拽用双 MIME 通道**：自定义 MIME 用于应用内，`text/plain` 用于向外兼容，避免元素 id 被外部文本拖入劫持（`onDrop` 只在 payload 声明了自定义 MIME 时才信任 `draggedElementId`）。
+- **预览用 mirror 而非画布**：直接复用 MathLive 渲染，避免二次实现一套排版。
+- **`ensureMathfield` 轮询**：自定义元素升级和 shadow root 准备是异步的，轮询是跨引擎最稳的等待方式。
+
+## 已知边界
+
+- `MAX_MATRIX_COLUMNS = 100`（`EquationWorkspace.vue`）：`ponytail:` 注释标记的实用上限，若公式真的需要 100+ 列再提高。
+- `offsetEdges` 按 `mf.value + 宽度` 做缓存 key，值变化即失效重算。
