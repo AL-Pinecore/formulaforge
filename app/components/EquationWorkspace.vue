@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { MathfieldElement, LatexSyntaxError } from 'mathlive'
-import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { getElementById } from '~/data/equation-elements'
 import { DRAG_ELEMENT_MIME, draggedElementId } from '~/utils/drag-payload'
 import { restoreEmptyGroupLatex } from '~/utils/empty-group'
@@ -10,6 +10,7 @@ import { ensurePlaceholderSupport } from '~/utils/mathfield-placeholder'
 import { ensureAccentPositioning } from '~/utils/mathfield-accent'
 import { removeElementAtPlaceholder } from '~/utils/remove-empty-element'
 import { normalizeDifferential } from '~/utils/latex-normalize'
+import { matrixCommandsForKey, type MatrixCommand } from '~/utils/matrix'
 import {
   addTextBoundaries,
   emptyTextSentinelLatex,
@@ -45,9 +46,55 @@ const PLACEHOLDER_GLYPH = '▢'
 const PLACEHOLDER_CLICK_PAD = 10
 const TEXT_FILE_EXTENSIONS = ['tex', 'latex', 'txt', 'md', 'markdown']
 const MAX_FILE_SIZE = 1_000_000
+// ponytail: practical ceiling; raise this if formulas genuinely need 100+ columns.
+const MAX_MATRIX_COLUMNS = 100
+
+type MatrixMenuCommand =
+  | MatrixCommand
+  | 'addColumnBefore'
+  | 'addRowBefore'
+
+interface MatrixMenuTarget {
+  x: number
+  y: number
+  cell: boolean
+  rows: number
+  columns: number
+  minColumns: number
+}
 
 const containerEl = ref<HTMLDivElement | null>(null)
 const dragging = ref(false)
+const matrixMenu = ref<MatrixMenuTarget | null>(null)
+const matrixMenuItems = computed(() => {
+  const target = matrixMenu.value
+  if (!target) return []
+  if (!target.cell) {
+    return [
+      { id: 'addRowAfter', label: t('matrix.addRow') },
+      { id: 'addColumnAfter', label: t('matrix.addColumn') },
+    ]
+  }
+  return [
+    { id: 'addRowBefore', label: t('matrix.insertRowAbove') },
+    { id: 'addRowAfter', label: t('matrix.insertRowBelow') },
+    { id: 'addColumnBefore', label: t('matrix.insertColumnBefore'), dividerBefore: true },
+    { id: 'addColumnAfter', label: t('matrix.insertColumnAfter') },
+    {
+      id: 'removeRow',
+      label: t('matrix.deleteRow'),
+      danger: true,
+      disabled: target.rows <= 1,
+      dividerBefore: true,
+    },
+    {
+      id: 'removeColumn',
+      label: t('matrix.deleteColumn'),
+      danger: true,
+      disabled: target.columns <= target.minColumns,
+    },
+  ]
+})
 const insertionPreview = ref<string | null>(null)
 const previewBox = ref<{ left: number; top: number; width: number; height: number } | null>(null)
 const textHints = ref<
@@ -959,6 +1006,7 @@ function isAcceptedTextFile(file: File): boolean {
 function configureMathfield(mf: MathfieldElement) {
   mf.placeholder = t('workspace.placeholder')
   mf.mathVirtualKeyboardPolicy = 'manual'
+  mf.maxMatrixCols = MAX_MATRIX_COLUMNS
   mf.defaultMode = props.displayStyle ? 'math' : 'inline-math'
   mf.style.fontSize = `${props.fontSize}px`
   const normalized = addTextBoundaries(mf.value)
@@ -1516,6 +1564,217 @@ let caretArrivedByNavigation = false
 // `selection-change` disambiguates which side the caret reached.
 let lastArrowDirection: 'left' | 'right' | null = null
 
+interface InternalAtom {
+  type: string
+  parent?: InternalAtom
+  parentBranch?: unknown
+}
+
+interface InternalMatrix extends InternalAtom {
+  environmentName: string
+  rowCount: number
+  colCount: number
+  minColumns: number
+  getCell: (row: number, column: number) => InternalAtom[] | undefined
+}
+
+interface InternalModel {
+  at: (position: number) => InternalAtom
+  offsetOf: (atom: InternalAtom) => number
+}
+
+interface MatrixContext {
+  matrix: InternalMatrix
+  row: number
+  column: number
+  rowEmpty: boolean
+  columnEmpty: boolean
+}
+
+function internalModel(mf: MathfieldElement): InternalModel | null {
+  return (mf as unknown as { _mathfield?: { model?: InternalModel } })._mathfield?.model ?? null
+}
+
+function isMatrix(atom: InternalAtom | undefined): atom is InternalMatrix {
+  return Boolean(
+    atom?.type === 'array' &&
+      typeof (atom as InternalMatrix).environmentName === 'string' &&
+      /matrix\*?$/.test((atom as InternalMatrix).environmentName),
+  )
+}
+
+function isEmptyMatrixCell(matrix: InternalMatrix, row: number, column: number): boolean {
+  return Boolean(
+    matrix.getCell(row, column)?.every((atom) =>
+      atom.type === 'first' || atom.type === 'placeholder',
+    ),
+  )
+}
+
+function matrixContextAtCaret(mf: MathfieldElement): MatrixContext | null {
+  const model = internalModel(mf)
+  let atom = model?.at(mf.position)
+  while (atom) {
+    const branch = atom.parentBranch
+    if (
+      Array.isArray(branch) &&
+      branch.length === 2 &&
+      typeof branch[0] === 'number' &&
+      typeof branch[1] === 'number' &&
+      isMatrix(atom.parent)
+    ) {
+      const matrix = atom.parent
+      const row = branch[0]
+      const column = branch[1]
+      return {
+        matrix,
+        row,
+        column,
+        rowEmpty: Array.from({ length: matrix.colCount }, (_, col) => col).every((col) =>
+          isEmptyMatrixCell(matrix, row, col),
+        ),
+        columnEmpty: Array.from({ length: matrix.rowCount }, (_, line) => line).every((line) =>
+          isEmptyMatrixCell(matrix, line, column),
+        ),
+      }
+    }
+    atom = atom.parent
+  }
+  return null
+}
+
+function matrixAtCaret(mf: MathfieldElement): InternalMatrix | null {
+  let atom: InternalAtom | undefined = internalModel(mf)?.at(mf.position)
+  while (atom) {
+    if (isMatrix(atom)) return atom
+    atom = atom.parent
+  }
+  return null
+}
+
+function matrixAtPoint(mf: MathfieldElement, x: number, y: number): InternalMatrix | null {
+  const model = internalModel(mf)
+  if (!model) return null
+  const boxes = new Map<InternalMatrix, VisualBox>()
+
+  for (let offset = 0; offset <= mf.lastOffset; offset++) {
+    const bounds = mf.getElementInfo(offset)?.bounds
+    if (!bounds) continue
+    let atom: InternalAtom | undefined = model.at(offset)
+    while (atom) {
+      if (isMatrix(atom)) {
+        const box = boxes.get(atom)
+        boxes.set(atom, box
+          ? {
+              left: Math.min(box.left, bounds.left),
+              top: Math.min(box.top, bounds.top),
+              width: Math.max(box.left + box.width, bounds.right) - Math.min(box.left, bounds.left),
+              height: Math.max(box.top + box.height, bounds.bottom) - Math.min(box.top, bounds.top),
+            }
+          : {
+              left: bounds.left,
+              top: bounds.top,
+              width: bounds.width,
+              height: bounds.height,
+            })
+      }
+      atom = atom.parent
+    }
+  }
+
+  const padding = Math.max(20, props.fontSize)
+  return [...boxes]
+    .map(([matrix, box]) => ({
+      matrix,
+      distance: Math.hypot(
+        Math.max(box.left - x, 0, x - box.left - box.width),
+        Math.max(box.top - y, 0, y - box.top - box.height),
+      ),
+    }))
+    .filter(({ distance }) => distance <= padding)
+    .sort((a, b) => a.distance - b.distance)[0]?.matrix ?? null
+}
+
+function executeMatrixCommands(mf: MathfieldElement, commands: readonly MatrixMenuCommand[]) {
+  mf.focus()
+  for (const command of commands) mf.executeCommand(command)
+  restoreEmptyGroups(mf)
+  publishState(mf)
+  scheduleUpdateTextHints()
+}
+
+function handleMatrixResizeKey(event: KeyboardEvent, mf: MathfieldElement): boolean {
+  if (
+    (event.key !== 'Enter' && event.key !== 'Backspace' && event.key !== 'Delete') ||
+    event.altKey ||
+    event.ctrlKey ||
+    event.metaKey ||
+    event.shiftKey ||
+    (!mf.selectionIsCollapsed && !isSinglePlaceholderSelection(mf))
+  ) {
+    return false
+  }
+  const context = matrixContextAtCaret(mf)
+  if (!context) return false
+  const commands = matrixCommandsForKey(
+    {
+      row: context.row,
+      column: context.column,
+      rows: context.matrix.rowCount,
+      columns: context.matrix.colCount,
+      rowEmpty: context.rowEmpty,
+      columnEmpty: context.columnEmpty,
+    },
+    event.key === 'Enter' ? 'Enter' : 'Delete',
+  )
+  if (commands.length === 0) return false
+
+  event.preventDefault()
+  event.stopPropagation()
+  executeMatrixCommands(mf, commands)
+  return true
+}
+
+function onMfContextMenu(event: MouseEvent) {
+  const mf = getMf()
+  const model = mf && internalModel(mf)
+  if (!mf || !model) return
+
+  const offset = mf.getOffsetFromPoint(event.clientX, event.clientY)
+  if (!Number.isInteger(offset) || offset < 0) return
+  mf.position = offset
+
+  let context = matrixContextAtCaret(mf)
+  const clickedCell = Boolean(context)
+  if (!context) {
+    const matrix = matrixAtCaret(mf) ?? matrixAtPoint(mf, event.clientX, event.clientY)
+    const cell = matrix?.getCell(matrix.rowCount - 1, matrix.colCount - 1)
+    const last = cell?.at(-1)
+    if (!matrix || !last) return
+    mf.position = model.offsetOf(last)
+    context = matrixContextAtCaret(mf)
+  }
+  if (!context) return
+
+  event.preventDefault()
+  event.stopPropagation()
+  mf.focus()
+  matrixMenu.value = {
+    x: event.clientX,
+    y: event.clientY,
+    cell: clickedCell,
+    rows: context.matrix.rowCount,
+    columns: context.matrix.colCount,
+    minColumns: context.matrix.minColumns,
+  }
+}
+
+function onMatrixMenuSelect(id: string) {
+  const mf = getMf()
+  if (!mf) return
+  executeMatrixCommands(mf, [id as MatrixMenuCommand])
+}
+
 const NON_ASCII_RE = /[^\x00-\x7F]/
 
 function hasNonAsciiText(data: string | null | undefined): boolean {
@@ -1661,6 +1920,7 @@ function handleKeydown(event: KeyboardEvent) {
   if (!mf || !mf.hasFocus()) {
     return
   }
+  if (handleMatrixResizeKey(event, mf)) return
   // Typing into a `\text{...}` box: MathLive collapses a single-atom text
   // command and drops the `\text{}` wrapper, so intercept every printable
   // character in a text context and rebuild the whole text group ourselves.
@@ -2560,6 +2820,7 @@ defineExpose({
           @compositionupdate.capture="onCompositionUpdate"
           @compositionend.capture="onCompositionEnd"
           @pointerdown.capture="onMfPointerDown"
+          @contextmenu.capture="onMfContextMenu"
           @undo-state-change="onUndoStateChange($event.target as unknown as MathfieldElement)"
           @focus="requestEnglishIme(); syncPlaceholderSelected(); syncCaretInText(); scheduleUpdateTextHints()"
           @blur="restoreImeAfterBlur(); syncPlaceholderSelected(); syncCaretInText(); scheduleUpdateTextHints()"
@@ -2602,6 +2863,14 @@ defineExpose({
           {{ t('workspace.dropHint') }}
         </div>
       </Transition>
+      <ContextMenu
+        :open="Boolean(matrixMenu)"
+        :x="matrixMenu?.x ?? 0"
+        :y="matrixMenu?.y ?? 0"
+        :items="matrixMenuItems"
+        @close="matrixMenu = null"
+        @select="onMatrixMenuSelect"
+      />
     </div>
   </template>
 

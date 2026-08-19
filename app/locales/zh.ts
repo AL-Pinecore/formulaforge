@@ -33,6 +33,16 @@ export default {
     placeholder: '在此输入 LaTeX 或拖入元素…',
     dropHint: '拖放以在光标处插入',
   },
+  matrix: {
+    addRow: '添加一行',
+    addColumn: '添加一列',
+    insertRowAbove: '在上方插入一行',
+    insertRowBelow: '在下方插入一行',
+    insertColumnBefore: '在前面插入一列',
+    insertColumnAfter: '在后面插入一列',
+    deleteRow: '删除所在行',
+    deleteColumn: '删除所在列',
+  },
   export: {
     title: '导出',
     format: '格式',

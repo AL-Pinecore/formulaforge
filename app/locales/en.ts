@@ -33,6 +33,16 @@ export default {
     placeholder: 'Type LaTeX or Drag Elements Here…',
     dropHint: 'Drop to insert at the caret',
   },
+  matrix: {
+    addRow: 'Add row',
+    addColumn: 'Add column',
+    insertRowAbove: 'Insert row above',
+    insertRowBelow: 'Insert row below',
+    insertColumnBefore: 'Insert column before',
+    insertColumnAfter: 'Insert column after',
+    deleteRow: 'Delete row',
+    deleteColumn: 'Delete column',
+  },
   export: {
     title: 'Export',
     format: 'Format',
