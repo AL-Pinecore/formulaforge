@@ -1,7 +1,6 @@
 export interface MathJaxLike {
-  startup: { promise: Promise<void>; adaptor: any; document: any }
+  startup: { promise: Promise<void>; adaptor: any }
   tex2svgPromise: (math: string, options?: Record<string, unknown>) => Promise<SVGElement>
-  svgStylesheet: () => HTMLElement
 }
 
 declare global {

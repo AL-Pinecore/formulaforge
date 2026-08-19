@@ -2,6 +2,7 @@ import { ref } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { renderEquationSvg } from '~/utils/svg-export'
 import { svgToPdfBlob, svgToRasterBlob } from '~/utils/browser-export'
+import { saveBlob } from '~/utils/clipboard'
 import { EXPORT_FORMAT_EXTENSIONS, EXPORT_FORMAT_LABELS } from '~/types/export'
 import type { ExportFormat, ExportSettings } from '~/types/export'
 import { buildExportPayload, effectiveExportSettings, EXPORT_FORMAT_ORDER } from '~/utils/export-payload'
@@ -13,17 +14,6 @@ export function isTauriRuntime(): boolean {
   // Tauri 2 sets both `window.isTauri` (a boolean flag) and
   // `window.__TAURI_INTERNALS__` (the IPC bridge).
   return (window as { isTauri?: boolean }).isTauri === true || '__TAURI_INTERNALS__' in window
-}
-
-function downloadBlob(blob: Blob, filename: string) {
-  const url = URL.createObjectURL(blob)
-  const anchor = document.createElement('a')
-  anchor.href = url
-  anchor.download = filename
-  document.body.appendChild(anchor)
-  anchor.click()
-  anchor.remove()
-  setTimeout(() => URL.revokeObjectURL(url), 1000)
 }
 
 export function useEquationExport() {
@@ -62,10 +52,10 @@ export function useEquationExport() {
       }
 
       if (settings.format === 'svg') {
-        downloadBlob(new Blob([rendered.svg], { type: 'image/svg+xml' }), `equation.${extension}`)
+        saveBlob(new Blob([rendered.svg], { type: 'image/svg+xml' }), `equation.${extension}`)
       } else if (settings.format === 'pdf') {
         const blob = await svgToPdfBlob(rendered.svg, rendered.width, rendered.height)
-        downloadBlob(blob, `equation.${extension}`)
+        saveBlob(blob, `equation.${extension}`)
       } else {
         const blob = await svgToRasterBlob(
           rendered.svg,
@@ -74,7 +64,7 @@ export function useEquationExport() {
           settings.format,
           effective.jpegQuality,
         )
-        downloadBlob(blob, `equation.${extension}`)
+        saveBlob(blob, `equation.${extension}`)
       }
       lastPath.value = `equation.${extension}`
       return true

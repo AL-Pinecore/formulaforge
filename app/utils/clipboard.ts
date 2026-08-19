@@ -23,8 +23,7 @@ export function wrapInlineMath(latex: string): string {
   return `$${latex}$`
 }
 
-export function downloadTextFile(contents: string, filename: string, mime: string) {
-  const blob = new Blob([contents], { type: mime })
+export function saveBlob(blob: Blob, filename: string) {
   const url = URL.createObjectURL(blob)
   const anchor = document.createElement('a')
   anchor.href = url
@@ -35,17 +34,10 @@ export function downloadTextFile(contents: string, filename: string, mime: strin
   setTimeout(() => URL.revokeObjectURL(url), 1000)
 }
 
-export function wrapDisplayMath(latex: string): string {
-  return `\\[${latex}\\]`
+export function downloadTextFile(contents: string, filename: string, mime: string) {
+  saveBlob(new Blob([contents], { type: mime }), filename)
 }
 
-export function wrapStandaloneDocument(latex: string): string {
-  return [
-    '\\documentclass[12pt]{article}',
-    '\\usepackage{amsmath,amssymb}',
-    '\\begin{document}',
-    `\\[${latex}\\]`,
-    '\\end{document}',
-    '',
-  ].join('\n')
+export function wrapDisplayMath(latex: string): string {
+  return `\\[${latex}\\]`
 }

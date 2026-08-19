@@ -4,7 +4,6 @@ import { ELEMENT_CATEGORY_LABELS, ELEMENT_CATEGORY_ORDER } from '~/types/equatio
 import type { ElementCategory, EquationElement } from '~/types/equation'
 import { EQUATION_ELEMENTS } from '~/data/equation-elements'
 import { DRAG_ELEMENT_MIME, draggedElementId } from '~/utils/drag-payload'
-import { toCamelCase } from '~/utils/string-case'
 import { useI18n } from '~/composables/useI18n'
 
 const emit = defineEmits<{ insert: [element: EquationElement] }>()
@@ -16,7 +15,8 @@ const search = ref('')
 const collapsed = ref<Set<ElementCategory>>(new Set(ELEMENT_CATEGORY_ORDER))
 
 function elementLabel(element: EquationElement): string {
-  return t(`element.${toCamelCase(element.id)}`, undefined, element.label)
+  const key = `element.${element.id.replace(/-([a-z])/g, (_match, letter: string) => letter.toUpperCase())}`
+  return t(key, undefined, element.label)
 }
 
 const TOOLTIP_DELAY_MS = 600

@@ -2,11 +2,22 @@
 // deleting a group's content (e.g. the argument of \sqrt) leaves an editable
 // placeholder behind instead of a broken empty group.
 
+import { MATH_FONT_COMMANDS, TEXT_COMMANDS } from './text-boundary'
+
 // A whole matrix/cases/aligned environment body.
 const ENVIRONMENT = /(\\begin\{[a-zA-Z]+\*?\}(?:\[[^\]]*\])?)([\s\S]*?)(\\end\{[a-zA-Z]+\*?\})/g
 
-const TEXT_COMMAND_SUFFIXES = 'bf|it|md|rm|normal|sc|sf|sl|tt|up'
-const MATH_FONT_COMMANDS = 'rm|bf|bm|it|sf|tt|cal|bb|frak'
+// Suffixes of the text/math-font commands (e.g. `textbf` -> `bf`) so the empty
+// box regexes below never drift from the command sets in text-boundary.ts.
+const TEXT_COMMAND_SUFFIXES = [...TEXT_COMMANDS]
+  .filter((command) => command.startsWith('text') && command !== 'text')
+  .map((command) => command.slice('text'.length))
+  .sort((a, b) => b.length - a.length)
+  .join('|')
+const MATH_FONT_COMMAND_SUFFIXES = [...MATH_FONT_COMMANDS]
+  .map((command) => (command.startsWith('math') ? command.slice('math'.length) : command))
+  .sort((a, b) => b.length - a.length)
+  .join('|')
 
 function fillEnvironmentCells(body: string): string {
   return body
@@ -33,7 +44,7 @@ export function restoreEmptyGroupLatex(latex: string): string | null {
     '\\$1{\\phantom{Text}}',
   )
   result = result.replace(
-    new RegExp(`\\\\(math(?:${MATH_FONT_COMMANDS}))\\{\\}`, 'g'),
+    new RegExp(`\\\\(math(?:${MATH_FONT_COMMAND_SUFFIXES}))\\{\\}`, 'g'),
     '\\$1{\\phantom{\\text{Text}}}',
   )
 
