@@ -65,3 +65,4 @@ MathLive 把每个文本字符序列化成独立的 `\text{<char>}` 原子，单
 
 - 内容含花括号的相邻文本盒不会被 `mergeAdjacentTextCommands` 合并（正则刻意跳过带 `{...}` 的内容）。
 - `\operatorname` 被 `OPAQUE_TEXT_COMMANDS` 视为不透明，整段拷贝不过手，避免破坏积分上下限等重序列化。
+- 清空整个输入框不会重置 MathLive 的模型 `mode`（`math`/`text`/`latex`），光标曾在文本框内时清空会残留 `text` 模式，导致下一次输入被包进 `\text{}`。`EquationWorkspace.ensureMathMode` 在内容为空时把它重置回 `math`（只重置 `text`，不碰进行中的反斜杠命令 `latex` 模式）。

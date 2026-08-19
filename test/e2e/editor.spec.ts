@@ -76,8 +76,7 @@ test('completes a typed command into a fraction with placeholders', async ({ pag
   await page.waitForTimeout(200)
   await page.keyboard.type('\\frac')
   await page.keyboard.press('Enter')
-  const latex = await page.locator('.latex-textarea').inputValue()
-  expect(latex).toContain('\\frac')
+  await expect(page.locator('.latex-textarea')).toHaveValue(/\\frac/, { timeout: 10000 })
 })
 
 test('completes a typed symbol command with Tab', async ({ page, goto }) => {
@@ -450,6 +449,64 @@ test('typing after escaping an empty Text box keeps the box and input clean', as
   await page.keyboard.press('ArrowLeft')
   await page.keyboard.type('xy')
   await expect(textarea).toHaveValue('xy\\text{}', { timeout: 10000 })
+})
+
+test('typing after clearing a filled Text box stays in math mode', async ({ page, goto }) => {
+  await goto('/', { waitUntil: 'hydration' })
+  const textarea = page.locator('.latex-textarea')
+  const field = page.locator('math-field')
+  await insertElement(page, 'Text', 'Text')
+  await expect(textarea).toHaveValue('\\text{}', { timeout: 10000 })
+  await expect(field).toBeFocused()
+  await page.keyboard.type('hello')
+  await expect(textarea).toHaveValue('\\text{hello}', { timeout: 10000 })
+
+  await page.getByRole('button', { name: 'Clear', exact: true }).click()
+  await expect(textarea).toHaveValue('')
+
+  await field.evaluate((el) => (el as { focus(): void }).focus())
+  await page.waitForTimeout(200)
+  await page.keyboard.type('x')
+  await expect(textarea).toHaveValue('x', { timeout: 10000 })
+})
+
+test('typing after clearing via the LaTeX source stays in math mode', async ({ page, goto }) => {
+  await goto('/', { waitUntil: 'hydration' })
+  const textarea = page.locator('.latex-textarea')
+  const field = page.locator('math-field')
+  await insertElement(page, 'Text', 'Text')
+  await expect(textarea).toHaveValue('\\text{}', { timeout: 10000 })
+  await page.keyboard.type('hi')
+  await expect(textarea).toHaveValue('\\text{hi}', { timeout: 10000 })
+
+  await textarea.fill('')
+  await textarea.blur()
+  await expect(textarea).toHaveValue('')
+
+  await field.evaluate((el) => (el as { focus(): void }).focus())
+  await page.waitForTimeout(200)
+  await page.keyboard.type('y')
+  await expect(textarea).toHaveValue('y', { timeout: 10000 })
+})
+
+test('typing after select-all delete of a Text box stays in math mode', async ({ page, goto }) => {
+  await goto('/', { waitUntil: 'hydration' })
+  const textarea = page.locator('.latex-textarea')
+  const field = page.locator('math-field')
+  await insertElement(page, 'Text', 'Text')
+  await expect(textarea).toHaveValue('\\text{}', { timeout: 10000 })
+  await page.keyboard.type('hi')
+  await expect(textarea).toHaveValue('\\text{hi}', { timeout: 10000 })
+
+  await field.evaluate((element) => {
+    const mf = element as unknown as { executeCommand(cmd: string): boolean }
+    mf.executeCommand('selectAll')
+  })
+  await page.keyboard.press('Delete')
+  await expect(textarea).toHaveValue('')
+
+  await page.keyboard.type('z')
+  await expect(textarea).toHaveValue('z', { timeout: 10000 })
 })
 
 test('an empty Text box keeps the gray hint and parks the caret in front of it', async ({

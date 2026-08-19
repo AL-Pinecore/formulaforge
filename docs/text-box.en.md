@@ -65,3 +65,4 @@ MathLive serializes each text character as a separate `\text{<char>}` atom; a si
 
 - Adjacent text boxes whose content contains braces are not merged by `mergeAdjacentTextCommands` (the regex deliberately skips `{...}` content).
 - `\operatorname` is treated as opaque via `OPAQUE_TEXT_COMMANDS` and copied through untouched, to avoid corrupting integral limits and similar re-serializations.
+- Clearing the whole field does not reset MathLive's model `mode` (`math`/`text`/`latex`); a field emptied while its caret was in a text box keeps `text` mode and wraps the next input in `\text{}`. `EquationWorkspace.ensureMathMode` resets it to `math` when the content is empty (only `text` is reset — an in-progress backslash command's `latex` mode is left alone).

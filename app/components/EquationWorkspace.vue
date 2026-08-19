@@ -936,6 +936,7 @@ function onSelectionChange() {
 }
 
 function onMfInput(mf: MathfieldElement) {
+  ensureMathMode(mf)
   publishState(mf)
   scheduleRestorePlaceholders(mf)
   syncCaretInText()
@@ -1624,6 +1625,7 @@ interface InternalModel {
   at: (position: number) => InternalAtom
   offsetOf: (atom: InternalAtom) => number
   atoms?: InternalAtom[]
+  mode: 'math' | 'text' | 'latex'
 }
 
 interface MatrixContext {
@@ -1636,6 +1638,22 @@ interface MatrixContext {
 
 function internalModel(mf: MathfieldElement): InternalModel | null {
   return (mf as unknown as { _mathfield?: { model?: InternalModel } })._mathfield?.model ?? null
+}
+
+// MathLive's model-level mode (`math`/`text`/`latex`) is not reset by a
+// `setValue('')` that empties the field, so a field cleared while its caret was
+// inside a `\text{...}` box keeps mode `text` and wraps the next typed
+// characters in `\text{}`. Force it back to math whenever the content is empty.
+// Only the stale `text` mode is reset — `latex` is the in-progress backslash
+// command composition (which also serializes `mf.value` to ''), so it must be
+// left alone. Set the internal property directly (rather than `mf.mode =
+// 'math'`, which routes through `switchMode`) to avoid an undo snapshot and
+// mode-change event.
+function ensureMathMode(mf: MathfieldElement): void {
+  const model = internalModel(mf)
+  if (model && mf.value === '' && model.mode === 'text') {
+    model.mode = 'math'
+  }
 }
 
 function isMatrix(atom: InternalAtom | undefined): atom is InternalMatrix {
@@ -2123,6 +2141,7 @@ function handleKeydown(event: KeyboardEvent) {
       event.preventDefault()
       event.stopPropagation()
       mf.value = ''
+      ensureMathMode(mf)
       publishState(mf)
       scheduleUpdateTextHints()
     }
@@ -2198,6 +2217,7 @@ function handleKeydown(event: KeyboardEvent) {
     const suffix = mf.getValue(group.end + 1, mf.lastOffset)
     const caretPublicLength = normalizePublicLatex(prefix).length
     mf.setValue(prefix + suffix, { mode: 'math', silenceNotifications: true })
+    ensureMathMode(mf)
     mf.position = publicStringOffsetToModel(mf, caretPublicLength)
     publishState(mf)
     syncCaretInText()
@@ -2727,6 +2747,7 @@ function setLatex(value: string): { value: string; errors: string[] } {
   if (restored !== null && restored !== mf.value) {
     mf.setValue(addTextBoundaries(restored), { mode: 'math', silenceNotifications: true })
   }
+  ensureMathMode(mf)
   scheduleUpdateTextHints()
   return {
     value: publicLatex(mf),
@@ -2750,6 +2771,7 @@ function clear() {
   if (mf.value !== '') {
     mf.value = ''
   }
+  ensureMathMode(mf)
   publishState(mf)
   scheduleUpdateTextHints()
 }
