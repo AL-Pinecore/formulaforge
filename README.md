@@ -102,6 +102,35 @@ test/                   # 前端测试（unit / nuxt / e2e）
 public/                 # 由脚本拷贝的 vendor 资源（MathLive 字体、MathJax）
 ```
 
+## 为项目添加新语言
+
+欢迎帮助 FormulaForge 支持更多语言！通常只需在 `app/locales/` 中新增一个 locale 文件，不需要修改组件、插件或语言切换逻辑。建议复制 `en.ts` 作为起点，然后完成翻译。
+
+每个 locale 文件的默认导出需要包含以下元数据：
+
+```ts
+export const mathlive = {
+  // 与其他 locale 保持相同的键
+  'menu.copy-as-typst': '复制为 Typst',
+}
+
+export default {
+  languageCode: 'zh-cn', // 唯一的 BCP 47 语言标签
+  displayName: '中文',   // 在语言切换栏中显示的本地语言名称
+  // 其余 UI 翻译……
+}
+```
+
+添加时请注意：
+
+- `languageCode` 是应用实际使用的语言标识，会自动用于语言切换栏的 option value、`HTML lang` 和第三方组件。请使用唯一的 BCP 47 标签；如果 MathLive 已支持该语言，请与它的 locale 名称完全一致。
+- `displayName` 是用户看到的名称，建议使用该语言自己的写法，例如 `Deutsch`、`日本語` 或 `中文`。
+- 请保留与其他 locale 相同的 UI 翻译键，只翻译值。现有测试会帮助检查是否遗漏了键。
+- 每个 locale 文件还需要导出 `export const mathlive = { ... }`；它用于补充或覆盖 MathLive 词条，并且键必须与其他 locale 保持一致，无需在组件或插件中加入语言判断。
+- locale 文件会被自动发现并加入语言切换栏；文件名只用于整理，不作为语言标识。
+
+完成后运行 `npm run typecheck` 和 `npm test` 即可检查翻译文件。感谢你的贡献！
+
 ## 脚本速查
 
 | 命令                    | 说明                                  |

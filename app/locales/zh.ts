@@ -1,4 +1,32 @@
+export const mathlive = {
+  'tooltip.cut to clipboard': '剪切到剪贴板',
+  'tooltip.paste from clipboard': '从剪贴板粘贴',
+  'tooltip.menu': '菜单',
+  'menu.array.add row above': '在上方插入行',
+  'menu.array.add row below': '在下方插入行',
+  'menu.array.add column before': '在左侧插入列',
+  'menu.array.add column after': '在右侧插入列',
+  'menu.insert': '插入',
+  'menu.insert.abs': '绝对值',
+  'menu.insert.nth-root': 'n 次方根',
+  'menu.insert.log-base': '以 a 为底的对数',
+  'menu.insert.heading-calculus': '微积分',
+  'menu.insert.derivative': '导数',
+  'menu.insert.nth-derivative': 'n 阶导数',
+  'menu.insert.integral': '积分',
+  'menu.insert.sum': '求和',
+  'menu.insert.product': '乘积',
+  'menu.insert.heading-complex-numbers': '复数',
+  'menu.insert.modulus': '模',
+  'menu.insert.argument': '辐角',
+  'menu.insert.real-part': '实部',
+  'menu.insert.imaginary-part': '虚部',
+  'menu.insert.conjugate': '共轭',
+  'menu.copy-as-typst': '复制为 Typst',
+}
+
 export default {
+  languageCode: 'zh-cn',
   displayName: '中文',
   app: {
     title: 'FormulaForge — LaTeX 公式编辑器',

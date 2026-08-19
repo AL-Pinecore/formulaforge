@@ -1,4 +1,32 @@
+export const mathlive = {
+  'tooltip.cut to clipboard': 'Cut to Clipboard',
+  'tooltip.paste from clipboard': 'Paste from Clipboard',
+  'tooltip.menu': 'Menu',
+  'menu.array.add row above': 'Insert Row Above',
+  'menu.array.add row below': 'Insert Row Below',
+  'menu.array.add column before': 'Insert Column Before',
+  'menu.array.add column after': 'Insert Column After',
+  'menu.insert': 'Insert',
+  'menu.insert.abs': 'Absolute Value',
+  'menu.insert.nth-root': 'n-th Root',
+  'menu.insert.log-base': 'Logarithm Base a',
+  'menu.insert.heading-calculus': 'Calculus',
+  'menu.insert.derivative': 'Derivative',
+  'menu.insert.nth-derivative': 'n-th Derivative',
+  'menu.insert.integral': 'Integral',
+  'menu.insert.sum': 'Sum',
+  'menu.insert.product': 'Product',
+  'menu.insert.heading-complex-numbers': 'Complex Numbers',
+  'menu.insert.modulus': 'Modulus',
+  'menu.insert.argument': 'Argument',
+  'menu.insert.real-part': 'Real Part',
+  'menu.insert.imaginary-part': 'Imaginary Part',
+  'menu.insert.conjugate': 'Conjugate',
+  'menu.copy-as-typst': 'Copy as Typst',
+}
+
 export default {
+  languageCode: 'en',
   displayName: 'English',
   app: {
     title: 'FormulaForge — LaTeX Equation Editor',

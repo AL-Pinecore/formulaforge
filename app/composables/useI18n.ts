@@ -5,44 +5,60 @@ export type Locale = string
 const STORAGE_KEY = 'formulaforge.locale'
 
 type MessageValue = string | { [key: string]: MessageValue }
-type MessageDictionary = { [key: string]: MessageValue }
+type MessageDictionary = {
+  languageCode: string
+  displayName: string
+  [key: string]: MessageValue
+}
+
+export type LocaleOption = Pick<MessageDictionary, 'languageCode' | 'displayName'>
 
 export type MessageParams = Record<string, string | number>
 
-const localeModules = import.meta.glob<{ default: MessageDictionary }>('../locales/*.ts', {
+const localeModules = import.meta.glob<{
+  default: MessageDictionary
+  mathlive: Record<string, string>
+}>('../locales/*.ts', {
   eager: true,
 })
 
-function localeCodeFromPath(path: string): string {
-  const filename = path.split('/').pop() ?? ''
-  return filename.replace(/\.ts$/, '')
-}
-
 const dictionaries: Record<string, MessageDictionary> = {}
+const mathliveStrings: Record<string, Record<string, string>> = {}
 
-for (const [path, module] of Object.entries(localeModules)) {
+for (const module of Object.values(localeModules)) {
   const dict = module?.default
-  if (!dict || typeof dict !== 'object' || typeof dict.displayName !== 'string') {
+  if (
+    !dict ||
+    typeof dict !== 'object' ||
+    typeof dict.languageCode !== 'string' ||
+    typeof dict.displayName !== 'string' ||
+    !module.mathlive ||
+    typeof module.mathlive !== 'object'
+  ) {
     continue
   }
-  dictionaries[localeCodeFromPath(path)] = dict
+  dictionaries[dict.languageCode] = dict
+  mathliveStrings[dict.languageCode] = module.mathlive
 }
 
-const availableLocales: Locale[] = Object.keys(dictionaries).sort()
+const availableLocales: LocaleOption[] = Object.values(dictionaries)
+  .map(({ languageCode, displayName }) => ({ languageCode, displayName }))
+  .sort((a, b) => a.languageCode.localeCompare(b.languageCode))
+const availableLanguageCodes = availableLocales.map(({ languageCode }) => languageCode)
 
 function detectSystemLocale(): Locale {
   if (typeof navigator !== 'undefined' && typeof navigator.language === 'string') {
     const system = navigator.language.toLowerCase()
-    const exact = availableLocales.find((code) => code.toLowerCase() === system)
+    const exact = availableLanguageCodes.find((code) => code.toLowerCase() === system)
     if (exact) {
       return exact
     }
-    const prefix = availableLocales.find((code) => system.startsWith(code.toLowerCase()))
+    const prefix = availableLanguageCodes.find((code) => system.startsWith(code.toLowerCase()))
     if (prefix) {
       return prefix
     }
   }
-  return availableLocales[0] ?? 'en'
+  return availableLanguageCodes[0] ?? 'en'
 }
 
 function readStoredLocale(): Locale | null {
@@ -51,7 +67,7 @@ function readStoredLocale(): Locale | null {
   }
   try {
     const stored = window.localStorage.getItem(STORAGE_KEY)
-    return stored && availableLocales.includes(stored) ? stored : null
+    return stored && availableLanguageCodes.includes(stored) ? stored : null
   } catch {
     return null
   }
@@ -93,11 +109,6 @@ function t(key: string, params?: MessageParams, fallback?: string): string {
   return interpolate(template ?? fallback ?? key, params)
 }
 
-function localeDisplayName(code: Locale): string {
-  const name = dictionaries[code]?.displayName
-  return typeof name === 'string' ? name : code
-}
-
 function applyDocumentLanguage(code: Locale) {
   if (typeof document !== 'undefined') {
     document.documentElement.lang = code
@@ -105,7 +116,7 @@ function applyDocumentLanguage(code: Locale) {
 }
 
 function setLocale(next: Locale) {
-  if (!availableLocales.includes(next)) {
+  if (!availableLanguageCodes.includes(next)) {
     return
   }
   locale.value = next
@@ -127,6 +138,6 @@ export function useI18n() {
     t,
     setLocale,
     availableLocales,
-    localeDisplayName,
+    mathliveStrings,
   }
 }

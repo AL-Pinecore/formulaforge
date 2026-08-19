@@ -18,7 +18,7 @@ const emit = defineEmits<{
   copy: [kind: 'raw' | 'inline' | 'display']
 }>()
 
-const { locale, t, setLocale, availableLocales, localeDisplayName } = useI18n()
+const { locale, t, setLocale, availableLocales } = useI18n()
 const { theme, setTheme, availableThemes } = useTheme()
 
 const FONT_SIZES = [16, 20, 24, 32]
@@ -86,8 +86,8 @@ function onThemeChange(event: Event) {
         :value="locale"
         @change="onLocaleChange"
       >
-        <option v-for="l in availableLocales" :key="l" :value="l">
-          {{ localeDisplayName(l) }}
+        <option v-for="l in availableLocales" :key="l.languageCode" :value="l.languageCode">
+          {{ l.displayName }}
         </option>
       </select>
     </div>

@@ -33,6 +33,25 @@ test('loads the editor shell', async ({ page, goto }) => {
   await expect(page.locator('.export-panel')).toBeVisible()
 })
 
+test('localizes the MathLive context menu', async ({ page, goto }) => {
+  await goto('/', { waitUntil: 'hydration' })
+  await page.getByRole('combobox', { name: 'Language' }).selectOption('zh-cn')
+  const field = page.locator('math-field.workspace-field')
+  const localization = await field.evaluate((element) => {
+    const mathlive = element.constructor as typeof HTMLElement & {
+      locale: string
+      strings: Record<string, Record<string, string>>
+    }
+    return {
+      locale: mathlive.locale,
+      cut: mathlive.strings['zh-cn']?.['menu.cut'],
+      insert: mathlive.strings['zh-cn']?.['menu.insert'],
+      derivative: mathlive.strings['zh-cn']?.['menu.insert.derivative'],
+    }
+  })
+  expect(localization).toEqual({ locale: 'zh-cn', cut: '剪切', insert: '插入', derivative: '导数' })
+})
+
 test('inserts a fraction from the palette into the equation', async ({ page, goto }) => {
   await goto('/', { waitUntil: 'hydration' })
   await expect(page.locator('math-field')).toBeVisible()

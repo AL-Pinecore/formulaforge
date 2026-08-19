@@ -99,6 +99,35 @@ test/                   # frontend tests (unit / nuxt / e2e)
 public/                 # vendor assets copied by scripts (MathLive fonts, MathJax)
 ```
 
+## Adding a New Language
+
+Contributions that make FormulaForge available in more languages are very welcome! In most cases, you only need to add one locale file under `app/locales/`; no component, plugin, or language-switching changes are required. Copying `en.ts` is a good place to start.
+
+The default export of each locale file must include this metadata:
+
+```ts
+export const mathlive = {
+  // Keep the same keys as every other locale
+  'menu.copy-as-typst': 'Copy as Typst',
+}
+
+export default {
+  languageCode: 'zh-cn', // A unique BCP 47 language tag
+  displayName: '中文',   // The native name shown in the language selector
+  // The remaining UI translations…
+}
+```
+
+When adding a language:
+
+- `languageCode` is the app's real language identifier. It is automatically used as the selector option value, the `HTML lang` value, and the locale passed to third-party components. Use a unique BCP 47 tag; when MathLive supports the language, match its locale name exactly.
+- `displayName` is the user-facing label. Please write it in the language itself, such as `Deutsch`, `日本語`, or `中文`.
+- Keep the same UI translation keys as the other locale files and translate only their values. The existing tests will help catch missing keys.
+- Each locale file must also export `export const mathlive = { ... }` to supplement or override MathLive strings. Its keys must match every other locale, so no language-specific checks are needed in components or plugins.
+- Locale files are discovered automatically and added to the language selector. The filename is only for organization and is not used as the language identifier.
+
+When you are done, run `npm run typecheck` and `npm test` to validate the locale. Thank you for contributing!
+
 ## Scripts
 
 | Command               | Description                                                  |
