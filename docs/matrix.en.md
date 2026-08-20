@@ -5,15 +5,17 @@ Purpose: structural editing of array environments (matrix / cases / aligned) —
 ## Files
 
 - `app/utils/matrix.ts` — Enter/Delete decision logic
-- `app/components/EquationWorkspace.vue` — matrix model reading, context menu, command execution
+- `app/editor/MathLiveAdapter.ts` — private MathLive model types and sole access point
+- `app/editor/MatrixController.ts` — matrix context lookup and geometry hit-testing
+- `app/components/EquationWorkspace.vue` — context menu and command execution
 
 ## How it works
 
 ### Internal model reading
 
-MathLive's public API doesn't expose matrix structure, so the workspace reads the private model `mf._mathfield.model` (`internalModel`). The `InternalAtom`/`InternalMatrix` interfaces expose the array atom's `environmentName`, `rowCount`/`colCount`, `getCell(row, col)`, and the atom's parent/child relationship (`parent`/`parentBranch`).
+MathLive's public API doesn't expose matrix structure, so `MathLiveAdapter.internalModel` centralizes access to the private `mf._mathfield.model`. `MatrixController` uses the `InternalAtom`/`InternalMatrix` interfaces to access the array atom's `environmentName`, `rowCount`/`colCount`, `getCell(row, col)`, and the atom's parent/child relationship (`parent`/`parentBranch`).
 
-`isMatrix` checks that the atom is an array whose `environmentName` is a matrix, cases (including `dcases`/`rcases`), or `aligned` environment. They reuse the same row/column targeting and commands; cases cells use the generic placeholder restoration, while aligned equations keep their fixed alignment-column structure.
+`MatrixController.isMatrix` checks that the atom is an array whose `environmentName` is a matrix, cases (including `dcases`/`rcases`), or `aligned` environment. They reuse the same row/column targeting and commands; cases cells use the generic placeholder restoration, while aligned equations keep their fixed alignment-column structure.
 
 ### Caret context `matrixContextAtCaret`
 
@@ -41,5 +43,5 @@ Matrices and cases use MathLive's native row/column menu items, while `aligned` 
 
 ## Known limits
 
-- `internalModel` depends on the private `_mathfield.model` field and may break on MathLive upgrades; the related types live at the `InternalAtom`/`InternalModel` interfaces in `EquationWorkspace.vue`.
+- `internalModel` depends on the private `_mathfield.model` field and may break on MathLive upgrades; the related types and access live in `MathLiveAdapter.ts`.
 - `MAX_MATRIX_COLUMNS = 100` caps the column count.

@@ -5,15 +5,17 @@
 ## 涉及文件
 
 - `app/utils/matrix.ts` — Enter/Delete 键的增删决策
-- `app/components/EquationWorkspace.vue` — 矩阵模型读取、右键菜单、命令执行
+- `app/editor/MathLiveAdapter.ts` — MathLive 私有模型的类型与唯一访问入口
+- `app/editor/MatrixController.ts` — 矩阵上下文读取与几何命中
+- `app/components/EquationWorkspace.vue` — 右键菜单与命令执行
 
 ## 工作机制
 
 ### 内部模型读取
 
-MathLive 的公开 API 不暴露矩阵结构，工作区直接读私有模型 `mf._mathfield.model`（`internalModel`）。通过 `InternalAtom`/`InternalMatrix` 接口访问 array 原子的 `environmentName`、`rowCount`/`colCount`、`getCell(row, col)`，以及原子在模型里的父子关系（`parent`/`parentBranch`）。
+MathLive 的公开 API 不暴露矩阵结构，`MathLiveAdapter.internalModel` 集中读取私有模型 `mf._mathfield.model`。`MatrixController` 通过 `InternalAtom`/`InternalMatrix` 接口访问 array 原子的 `environmentName`、`rowCount`/`colCount`、`getCell(row, col)`，以及原子在模型里的父子关系（`parent`/`parentBranch`）。
 
-`isMatrix` 判定 atom 是 array，且 `environmentName` 是矩阵、cases（含 `dcases`/`rcases`）或 `aligned` 环境。它们复用同一套行列定位和命令；cases 新单元格沿用通用 placeholder 恢复，`aligned` 则保持自身固定的对齐列结构。
+`MatrixController.isMatrix` 判定 atom 是 array，且 `environmentName` 是矩阵、cases（含 `dcases`/`rcases`）或 `aligned` 环境。它们复用同一套行列定位和命令；cases 新单元格沿用通用 placeholder 恢复，`aligned` 则保持自身固定的对齐列结构。
 
 ### 光标上下文 `matrixContextAtCaret`
 
@@ -41,5 +43,5 @@ MathLive 的公开 API 不暴露矩阵结构，工作区直接读私有模型 `m
 
 ## 已知边界
 
-- `internalModel` 依赖 `_mathfield.model` 私有字段，MathLive 升级可能破坏；相关类型集中在 `EquationWorkspace.vue` 的 `InternalAtom`/`InternalModel` 接口处。
+- `internalModel` 依赖 `_mathfield.model` 私有字段，MathLive 升级可能破坏；相关类型与访问集中在 `MathLiveAdapter.ts`。
 - `MAX_MATRIX_COLUMNS = 100` 限制最大列数。

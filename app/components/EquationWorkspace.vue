@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { MathfieldElement, LatexSyntaxError } from 'mathlive'
+import type { MathfieldElement } from 'mathlive'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { getElementByCommand, getElementById } from '~/data/equation-elements'
 import { DRAG_ELEMENT_MIME, draggedElementId } from '~/utils/drag-payload'
@@ -31,6 +31,29 @@ import type { EquationElement } from '~/types/equation'
 import { useI18n } from '~/composables/useI18n'
 import { invoke } from '@tauri-apps/api/core'
 import { isTauriRuntime } from '~/composables/useEquationExport'
+import { EditorHistory } from '~/editor/EditorHistory'
+import {
+  disableNativeHistory,
+  ensureMathMode,
+  firstElementRangeAfter,
+  formatLatexErrors,
+  internalModel,
+  typedCommandName,
+  type InternalAtom,
+} from '~/editor/MathLiveAdapter'
+import {
+  enterPlaceholder,
+  isSinglePlaceholderSelection,
+  offsetFromPoint,
+  placeholderIndexAtPoint,
+  selectPlaceholderAtPoint,
+} from '~/editor/SelectionController'
+import {
+  isMatrix,
+  matrixAtPoint,
+  matrixContextAtCaret,
+  matrixOffsetAtPoint,
+} from '~/editor/MatrixController'
 
 const props = withDefaults(defineProps<{ fontSize: number; displayStyle?: boolean }>(), {
   displayStyle: true,
@@ -45,7 +68,6 @@ const emit = defineEmits<{
 const { t } = useI18n()
 
 const PREVIEW_GREY = '#9ca3af'
-const PLACEHOLDER_GLYPH = '▢'
 const PLACEHOLDER_CLICK_PAD = 10
 const TEXT_FILE_EXTENSIONS = ['tex', 'latex', 'txt', 'md', 'markdown']
 const MAX_FILE_SIZE = 1_000_000
@@ -107,78 +129,7 @@ let dragApplyFont = false
 let dragX = -1
 let dragY = -1
 
-interface HistoryEntry {
-  latex: string
-  position: number
-}
-
-const HISTORY_LIMIT = 1000
-const history: HistoryEntry[] = []
-let historyIndex = -1
-
-// MathLive's getOffsetFromPoint is unreliable with sub/superscripts and groups:
-// it returns 0 (the start of the formula) for many positions, which makes the
-// drag preview jump to the beginning. Instead, derive the caret offset from the
-// per-atom bounding boxes reported by getElementInfo, which are accurate.
-interface OffsetEdge {
-  x: number
-  offset: number
-  depth: number
-}
-
-let offsetEdgesKey = ''
-let offsetEdges: OffsetEdge[] = []
-
-function buildOffsetEdges(mf: MathfieldElement, left: number, right: number): OffsetEdge[] {
-  const key = `${mf.value}|${Math.round(right - left)}`
-  if (key === offsetEdgesKey) {
-    return offsetEdges
-  }
-  const edges: OffsetEdge[] = [
-    { x: left, offset: 0, depth: 0 },
-    { x: right, offset: mf.lastOffset, depth: 0 },
-  ]
-  for (let offset = 1; offset < mf.lastOffset; offset++) {
-    const info = mf.getElementInfo(offset)
-    const bounds = info?.bounds
-    if (!bounds || bounds.width < 0.5) {
-      continue
-    }
-    const depth = info?.depth ?? 0
-    edges.push({ x: bounds.left, offset: offset - 1, depth })
-    edges.push({ x: bounds.right, offset, depth })
-  }
-  edges.sort((a, b) => a.x - b.x)
-  offsetEdgesKey = key
-  offsetEdges = edges
-  return edges
-}
-
-function offsetFromPoint(mf: MathfieldElement, x: number, y: number): number {
-  const root = mf.shadowRoot
-  const latex = root?.querySelector('.ML__latex') as HTMLElement | null
-  if (!root || !latex) {
-    return -1
-  }
-  const rect = latex.getBoundingClientRect()
-  if (x < rect.left - 4 || x > rect.right + 4 || y < rect.top - 8 || y > rect.bottom + 8) {
-    return -1
-  }
-  if (mf.lastOffset <= 0) {
-    return 0
-  }
-  const edges = buildOffsetEdges(mf, rect.left, rect.right)
-  let best = edges[0]!
-  let bestDistance = Infinity
-  for (const edge of edges) {
-    const distance = Math.abs(edge.x - x)
-    if (distance < bestDistance || (distance === bestDistance && edge.depth > best.depth)) {
-      bestDistance = distance
-      best = edge
-    }
-  }
-  return Math.max(0, Math.min(mf.lastOffset, best.offset))
-}
+const history = new EditorHistory()
 
 function getMf(): MathfieldElement | null {
   return mathfield
@@ -504,37 +455,12 @@ function textGroupNearPosition(mf: MathfieldElement, position: number): TextGrou
   return null
 }
 
-function formatLatexErrors(errors: readonly LatexSyntaxError[]): string[] {
-  return errors.map((error) => {
-    const code = error.code.replace(/-/g, ' ')
-    const near = error.latex ? ` near '${error.latex}'` : ''
-    return `LaTeX ${code}${near}`
-  })
-}
-
-function disableNativeHistory(mf: MathfieldElement): void {
-  const controls = mf as unknown as {
-    stopRecording?: () => void
-    resetUndo?: () => void
-  }
-  controls.stopRecording?.()
-  controls.resetUndo?.()
-}
-
 function emitUndoState() {
-  emit('undo-state', historyIndex > 0, historyIndex >= 0 && historyIndex < history.length - 1)
+  emit('undo-state', history.canUndo, history.canRedo)
 }
 
 function recordHistory(mf: MathfieldElement): void {
-  const entry = { latex: publicLatex(mf), position: mf.position }
-  if (history[historyIndex]?.latex === entry.latex) {
-    history[historyIndex] = entry
-    return
-  }
-  history.splice(historyIndex + 1)
-  history.push(entry)
-  if (history.length > HISTORY_LIMIT) history.shift()
-  historyIndex = history.length - 1
+  history.record({ latex: publicLatex(mf), position: mf.position })
 }
 
 function publishState(mf: MathfieldElement, record = true) {
@@ -753,28 +679,6 @@ function scheduleUpdateTextHints() {
 }
 
 const PLACEHOLDER_LATEX_RE = /^\\placeholder(?:\[[^\]]*\])?\{\}$/
-// Whether the selection covers exactly one placeholder atom (used to hide the
-// selection highlight in favour of the caret). A wider selection that merely
-// includes a placeholder (e.g. Cmd+A) must keep its highlight.
-function isSinglePlaceholderSelection(mf: MathfieldElement): boolean {
-  const ranges = mf.selection?.ranges
-  if (!ranges || ranges.length !== 1) {
-    return false
-  }
-  const range = ranges[0]
-  if (!range) {
-    return false
-  }
-  const [start, end] = range
-  if (end - start !== 1) {
-    return false
-  }
-  const info = mf.getElementInfo(end) ?? mf.getElementInfo(start)
-  if (info?.latex == null) {
-    return false
-  }
-  return PLACEHOLDER_LATEX_RE.test(info.latex)
-}
 
 // The empty text box has no placeholder capture, but its interior spans
 // several phantom atoms; arrow keys are handled manually so a single press
@@ -1514,52 +1418,6 @@ function completeStyleSwitch(mf: MathfieldElement, name: string, event: Keyboard
   scheduleUpdateTextHints()
 }
 
-// The caret-offset range `[start, end]` of the first element after the caret
-// (an atom together with its scripts), or null when nothing follows. MathLive
-// stores a scripted operator's sub/superscript before the operator in the flat
-// atom array, so the range starts at the operator's leading `first` child
-// (minus one) and ends at the operator itself. Ancestors (e.g. the enclosing
-// `\frac`) are skipped because their range begins before the caret.
-function firstElementRangeAfter(mf: MathfieldElement): [number, number] | null {
-  const model = internalModel(mf)
-  if (!model?.atoms) {
-    return null
-  }
-  const position = mf.position
-  const startIndex = position === 0 ? 0 : position + 1
-  for (let i = startIndex; i < model.atoms.length; i++) {
-    const atom = model.atoms[i]!
-    if (atom.type === 'first' || atom.type === 'placeholder') {
-      continue
-    }
-    const end = model.offsetOf(atom)
-    const start = atom.firstChild ? model.offsetOf(atom.firstChild) - 1 : end - 1
-    if (start < position) {
-      continue
-    }
-    return [start, end]
-  }
-  return null
-}
-
-// The command name being composed in LaTeX mode, read from MathLive's internal
-// `latexgroup` atom (its typed characters — including the greyed suggestion
-// suffix — are not reflected in `mf.value`, which serializes to '' while a
-// command is in progress). This mirrors how MathLive's own `complete` command
-// reads the command, and is the same internal-model access the matrix editing
-// already relies on.
-function typedCommandName(mf: MathfieldElement): string | null {
-  const group = internalModel(mf)?.atoms?.find((atom) => atom.type === 'latexgroup')
-  if (!group?.body) {
-    return null
-  }
-  const command = group.body
-    .filter((atom) => atom.type === 'latex')
-    .map((atom) => atom.value ?? '')
-    .join('')
-  return command.match(/^\\([a-zA-Z]+)/)?.[1] ?? null
-}
-
 function onSuggestionClick(event: MouseEvent): void {
   const item = (event.target as Element | null)?.closest<HTMLElement>(
     '#mathlive-suggestion-popover [data-command]',
@@ -1733,212 +1591,6 @@ let caretArrivedByNavigation = false
 // offset. The direction plus the `caret-in-text` state updated by
 // `selection-change` disambiguates which side the caret reached.
 let lastArrowDirection: 'left' | 'right' | null = null
-
-interface InternalAtom {
-  type: string
-  parent?: InternalAtom
-  parentBranch?: unknown
-  body?: InternalAtom[]
-  value?: string
-  firstChild?: InternalAtom
-}
-
-interface InternalMatrix extends InternalAtom {
-  environmentName: string
-  rowCount: number
-  colCount: number
-  minColumns: number
-  getCell: (row: number, column: number) => InternalAtom[] | undefined
-}
-
-interface InternalModel {
-  at: (position: number) => InternalAtom
-  offsetOf: (atom: InternalAtom) => number
-  atoms?: InternalAtom[]
-  mode: 'math' | 'text' | 'latex'
-}
-
-interface MatrixContext {
-  matrix: InternalMatrix
-  row: number
-  column: number
-  rowEmpty: boolean
-  columnEmpty: boolean
-}
-
-function internalModel(mf: MathfieldElement): InternalModel | null {
-  return (mf as unknown as { _mathfield?: { model?: InternalModel } })._mathfield?.model ?? null
-}
-
-// MathLive's model-level mode (`math`/`text`/`latex`) is not reset by a
-// `setValue('')` that empties the field, so a field cleared while its caret was
-// inside a `\text{...}` box keeps mode `text` and wraps the next typed
-// characters in `\text{}`. Force it back to math whenever the content is empty.
-// Only the stale `text` mode is reset — `latex` is the in-progress backslash
-// command composition (which also serializes `mf.value` to ''), so it must be
-// left alone. Set the internal property directly (rather than `mf.mode =
-// 'math'`, which routes through `switchMode`) to avoid an undo snapshot and
-// mode-change event.
-function ensureMathMode(mf: MathfieldElement): void {
-  const model = internalModel(mf)
-  if (model && mf.value === '' && model.mode === 'text') {
-    model.mode = 'math'
-  }
-}
-
-function isMatrix(atom: InternalAtom | undefined): atom is InternalMatrix {
-  return Boolean(
-    atom?.type === 'array' &&
-      typeof (atom as InternalMatrix).environmentName === 'string' &&
-      (/matrix\*?$/.test((atom as InternalMatrix).environmentName) ||
-        /^[dr]?cases$/.test((atom as InternalMatrix).environmentName) ||
-        (atom as InternalMatrix).environmentName === 'aligned'),
-  )
-}
-
-function isEmptyMatrixCell(matrix: InternalMatrix, row: number, column: number): boolean {
-  return Boolean(
-    matrix.getCell(row, column)?.every((atom) =>
-      atom.type === 'first' || atom.type === 'placeholder',
-    ),
-  )
-}
-
-function matrixContextAtCaret(mf: MathfieldElement): MatrixContext | null {
-  const model = internalModel(mf)
-  let atom = model?.at(mf.position)
-  while (atom) {
-    const branch = atom.parentBranch
-    if (
-      Array.isArray(branch) &&
-      branch.length === 2 &&
-      typeof branch[0] === 'number' &&
-      typeof branch[1] === 'number' &&
-      isMatrix(atom.parent)
-    ) {
-      const matrix = atom.parent
-      const row = branch[0]
-      const column = branch[1]
-      return {
-        matrix,
-        row,
-        column,
-        rowEmpty: Array.from({ length: matrix.colCount }, (_, col) => col).every((col) =>
-          isEmptyMatrixCell(matrix, row, col),
-        ),
-        columnEmpty: Array.from({ length: matrix.rowCount }, (_, line) => line).every((line) =>
-          isEmptyMatrixCell(matrix, line, column),
-        ),
-      }
-    }
-    atom = atom.parent
-  }
-  return null
-}
-
-function matrixAtPoint(mf: MathfieldElement, x: number, y: number): InternalMatrix | null {
-  const model = internalModel(mf)
-  if (!model) return null
-  const boxes = new Map<InternalMatrix, VisualBox>()
-
-  for (let offset = 0; offset <= mf.lastOffset; offset++) {
-    const bounds = mf.getElementInfo(offset)?.bounds
-    if (!bounds) continue
-    let atom: InternalAtom | undefined = model.at(offset)
-    while (atom) {
-      if (isMatrix(atom)) {
-        const box = boxes.get(atom)
-        boxes.set(atom, box
-          ? {
-              left: Math.min(box.left, bounds.left),
-              top: Math.min(box.top, bounds.top),
-              width:
-                Math.max(box.left + box.width, bounds.left + bounds.width) -
-                Math.min(box.left, bounds.left),
-              height:
-                Math.max(box.top + box.height, bounds.top + bounds.height) -
-                Math.min(box.top, bounds.top),
-            }
-          : {
-              left: bounds.left,
-              top: bounds.top,
-              width: bounds.width,
-              height: bounds.height,
-            })
-      }
-      atom = atom.parent
-    }
-  }
-
-  const padding = Math.max(20, props.fontSize)
-  return [...boxes]
-    .map(([matrix, box]) => ({
-      matrix,
-      distance: Math.hypot(
-        Math.max(box.left - x, 0, x - box.left - box.width),
-        Math.max(box.top - y, 0, y - box.top - box.height),
-      ),
-    }))
-    .filter(({ distance }) => distance <= padding)
-    .sort((a, b) => a.distance - b.distance)[0]?.matrix ?? null
-}
-
-function matrixOffsetAtPoint(
-  mf: MathfieldElement,
-  matrix: InternalMatrix,
-  x: number,
-  y: number,
-): number | null {
-  const model = internalModel(mf)
-  if (!model) return null
-  let nearest: { distance: number; offset: number } | null = null
-  let hit: { area: number; offset: number } | null = null
-
-  for (let row = 0; row < matrix.rowCount; row++) {
-    for (let column = 0; column < matrix.colCount; column++) {
-      const cell = matrix.getCell(row, column)
-      if (!cell) continue
-      let box: VisualBox | null = null
-      for (const atom of cell) {
-        const offset = model.offsetOf(atom)
-        const bounds = mf.getElementInfo(offset)?.bounds
-        if (!bounds) continue
-        const area = bounds.width * bounds.height
-        if (
-          x >= bounds.left &&
-          x <= bounds.left + bounds.width &&
-          y >= bounds.top &&
-          y <= bounds.top + bounds.height &&
-          (!hit || area < hit.area)
-        ) {
-          hit = { area, offset }
-        }
-        box = box
-          ? {
-              left: Math.min(box.left, bounds.left),
-              top: Math.min(box.top, bounds.top),
-              width:
-                Math.max(box.left + box.width, bounds.left + bounds.width) -
-                Math.min(box.left, bounds.left),
-              height:
-                Math.max(box.top + box.height, bounds.top + bounds.height) -
-                Math.min(box.top, bounds.top),
-            }
-          : { left: bounds.left, top: bounds.top, width: bounds.width, height: bounds.height }
-      }
-      const target = cell.at(-1)
-      if (!box || !target) continue
-      const distance = Math.hypot(
-        Math.max(box.left - x, 0, x - box.left - box.width),
-        Math.max(box.top - y, 0, y - box.top - box.height),
-      )
-      if (!nearest || distance < nearest.distance) {
-        nearest = { distance, offset: model.offsetOf(target) }
-      }
-    }
-  }
-  return hit?.offset ?? nearest?.offset ?? null
-}
 
 function executeMatrixCommands(mf: MathfieldElement, commands: readonly MatrixMenuCommand[]) {
   mf.focus()
@@ -2116,7 +1768,12 @@ function onMfContextMenu(event: MouseEvent) {
 
   const unwrap = contextUnwrapTarget ?? unwrapTargetAtPoint(mf, event.clientX, event.clientY)
 
-  const matrix = matrixAtPoint(mf, event.clientX, event.clientY)
+  const matrix = matrixAtPoint(
+    mf,
+    event.clientX,
+    event.clientY,
+    Math.max(20, props.fontSize),
+  )
   const offset = matrix
     ? matrixOffsetAtPoint(mf, matrix, event.clientX, event.clientY)
     : mf.getOffsetFromPoint(event.clientX, event.clientY)
@@ -2729,87 +2386,6 @@ function placeholderAtPoint(mf: MathfieldElement, x: number, y: number): boolean
   return placeholderIndexAtPoint(mf, x, y) >= 0
 }
 
-function placeholderIndexAtPoint(mf: MathfieldElement, x: number, y: number): number {
-  const root = mf.shadowRoot
-  if (!root) {
-    return -1
-  }
-  let index = 0
-  for (const node of root.querySelectorAll('*')) {
-    if (node.textContent?.trim() !== PLACEHOLDER_GLYPH) {
-      continue
-    }
-    const rect = node.getBoundingClientRect()
-    if (rect.width > 0 && rect.height > 0) {
-      if (
-        x >= rect.left - PLACEHOLDER_CLICK_PAD &&
-        x <= rect.right + PLACEHOLDER_CLICK_PAD &&
-        y >= rect.top - PLACEHOLDER_CLICK_PAD &&
-        y <= rect.bottom + PLACEHOLDER_CLICK_PAD
-      ) {
-        return index
-      }
-      index++
-    }
-  }
-  return -1
-}
-
-// Select the placeholder (in model order) whose rendered box contains the
-// given point. MathLive's moveToNextPlaceholder walks placeholders in model
-// order, so this handles structures where the visual order differs from the
-// model order (e.g. \sum's sub/superscript).
-function selectedPlaceholderAtPoint(mf: MathfieldElement, x: number, y: number): boolean {
-  const root = mf.shadowRoot
-  if (!root) {
-    return false
-  }
-  for (const node of root.querySelectorAll('.ML__selected')) {
-    if (node.textContent?.trim() !== PLACEHOLDER_GLYPH) {
-      continue
-    }
-    const rect = node.getBoundingClientRect()
-    if (
-      rect.width > 0 &&
-      rect.height > 0 &&
-      x >= rect.left - PLACEHOLDER_CLICK_PAD &&
-      x <= rect.right + PLACEHOLDER_CLICK_PAD &&
-      y >= rect.top - PLACEHOLDER_CLICK_PAD &&
-      y <= rect.bottom + PLACEHOLDER_CLICK_PAD
-    ) {
-      return true
-    }
-  }
-  return false
-}
-
-function selectPlaceholderAtPoint(mf: MathfieldElement, x: number, y: number): boolean {
-  mf.position = 0
-  let prevStart = -1
-  for (let i = 0; i < 64; i++) {
-    mf.executeCommand('moveToNextPlaceholder')
-    const start = mf.selection?.ranges?.[0]?.[0]
-    if (typeof start !== 'number' || start === prevStart) {
-      return false
-    }
-    prevStart = start
-    if (selectedPlaceholderAtPoint(mf, x, y)) {
-      return true
-    }
-  }
-  return false
-}
-
-function enterPlaceholder(mf: MathfieldElement, offset: number) {
-  if (!mf.selectionIsCollapsed) {
-    return
-  }
-  mf.position = offset
-  mf.executeCommand(
-    offset >= mf.lastOffset ? 'moveToPreviousPlaceholder' : 'moveToNextPlaceholder',
-  )
-}
-
 // An accent construct (`\hat{...}`, `\bar{...}`, ...) located in the model. The
 // construct atom serializes the whole command and sits at `constructOffset`;
 // its argument's content atoms are the contiguous non-empty run(s) right before
@@ -3236,9 +2812,9 @@ function setLatex(value: string): { value: string; errors: string[] } {
 
 function undo() {
   const mf = getMf()
-  if (!mf || historyIndex <= 0) return
-  historyIndex--
-  const entry = history[historyIndex]!
+  if (!mf) return
+  const entry = history.undo()
+  if (!entry) return
   loadLatex(mf, entry.latex)
   mf.position = Math.min(entry.position, mf.lastOffset)
   publishState(mf, false)
@@ -3247,9 +2823,9 @@ function undo() {
 
 function redo() {
   const mf = getMf()
-  if (!mf || historyIndex >= history.length - 1) return
-  historyIndex++
-  const entry = history[historyIndex]!
+  if (!mf) return
+  const entry = history.redo()
+  if (!entry) return
   loadLatex(mf, entry.latex)
   mf.position = Math.min(entry.position, mf.lastOffset)
   publishState(mf, false)

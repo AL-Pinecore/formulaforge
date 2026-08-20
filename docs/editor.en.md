@@ -4,7 +4,10 @@ Purpose: the core editing surface. Palette elements are dragged into the `<math-
 
 ## Files
 
-- `app/components/EquationWorkspace.vue` — workspace (field init, drag/drop, preview, state publishing)
+- `app/components/EquationWorkspace.vue` — workspace (field init, event orchestration, drag/drop, preview, state publishing)
+- `app/editor/EditorHistory.ts` — semantic public-LaTeX + caret-position history
+- `app/editor/MathLiveAdapter.ts` — centralized MathLive public/private model access
+- `app/editor/SelectionController.ts` — caret-offset and placeholder geometry
 - `app/components/EquationPalette.vue` — element palette (categories, search, tooltip, drag origin)
 - `app/utils/drag-payload.ts` — shared drag state (`draggedElementId` + MIME type)
 - `app/data/equation-elements.ts` — definitions of 200+ elements
@@ -18,11 +21,11 @@ Purpose: the core editing surface. Palette elements are dragged into the `<math-
 
 `useEquation.ts` holds `ref`s at module scope (`latex`, `errors`, `canUndo`, `canRedo`, `fontSize`, `displayStyle`); `useEquation()` always returns the same instance. Every component (workspace, toolbar, export panel) shares this state instead of threading props.
 
-The workspace feeds the equation and semantic history state back via `emit('latex-change', value, errors)` and `emit('undo-state', ...)`.
+The workspace feeds the equation and `EditorHistory` state back via `emit('latex-change', value, errors)` and `emit('undo-state', ...)`.
 
 ### Semantic undo / redo
 
-MathLive's native history records `setValue()`, while Text boundary markers, empty-box phantoms, and placeholder restoration all require internal `setValue()` calls; direct `applyStyle()` does not create a native snapshot at all. The workspace therefore disables MathLive history and records up to 1000 `public LaTeX + caret position` snapshots at the existing `publishState()` junction.
+MathLive's native history records `setValue()`, while Text boundary markers, empty-box phantoms, and placeholder restoration all require internal `setValue()` calls; direct `applyStyle()` does not create a native snapshot at all. The workspace therefore disables MathLive history, and `EditorHistory` records up to 1000 `public LaTeX + caret position` snapshots at the existing `publishState()` junction.
 
 History stores only the result of `publicLatex()`. Undo/redo passes it through `loadLatex()` to rebuild markers, phantoms, and placeholders. Internal repairs never become extra undo steps, while keyboard input/deletion, palette clicks and drops, Text/Accent rebuilding, font styles, matrix resizing, source edits, file imports, and clear all share the same history. A new snapshot drops the redo branch; toolbar actions and `Cmd/Ctrl+Z`, `Cmd/Ctrl+Shift+Z`, and `Ctrl+Y` use that same stack.
 
@@ -50,7 +53,7 @@ The drag starts in `EquationPalette.vue`'s `onDragStart`: it writes the element 
 
 The preview uses a second offscreen `math-field` (`ensureMirrorField`):
 
-1. `updateInsertionPreview` computes the target offset via `offsetFromPoint`;
+1. `updateInsertionPreview` computes the target offset via `SelectionController.offsetFromPoint`;
 2. `renderPreview` overlays the mirror on the real field, sets `mirror.value = mf.value`, then `mirror.insert(...)`;
 3. MathLive renders async, so `schedulePreviewSnapshot` uses rAF plus a `setTimeout(32ms)` fallback, then `snapshotPreview` copies the mirror's `.ML__latex` DOM into a static HTML overlay.
 
@@ -60,7 +63,7 @@ Empty Text elements also use the post-drop phantom sentinel in the mirror and re
 
 ### Offset computation `offsetFromPoint`
 
-MathLive's `getOffsetFromPoint` is unreliable with sub/superscripts and groups (returns 0 for many positions). The workspace implements its own: `buildOffsetEdges` walks each offset's `getElementInfo(offset).bounds` to build an `OffsetEdge[]`, then picks the offset nearest to the click, preferring greater depth.
+MathLive's `getOffsetFromPoint` is unreliable with sub/superscripts and groups (returns 0 for many positions). `SelectionController.buildOffsetEdges` walks each offset's `getElementInfo(offset).bounds` to build an `OffsetEdge[]`, then picks the offset nearest to the click, preferring greater depth.
 
 ### Backslash command input
 
@@ -91,4 +94,4 @@ The workspace extends MathLive's `menuItems`, so native editor commands, matrix 
 ## Known limits
 
 - `MAX_MATRIX_COLUMNS = 100` (`EquationWorkspace.vue`): a `ponytail:` practical ceiling; raise it only if formulas genuinely need 100+ columns.
-- `offsetEdges` is cached by `mf.value + width`; any value change invalidates it.
+- Each math-field's `offsetEdges` is cached in a `WeakMap` by `mf.value + width`; any value change invalidates it.

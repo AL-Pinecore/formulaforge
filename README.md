@@ -89,6 +89,7 @@ app/                    # Nuxt 前端
   components/           # 工作区、面板、工具栏、预览等组件
   composables/          # useEquation、useEquationExport
   data/                 # 公式元素定义
+  editor/               # 编辑历史、MathLive 适配、选区与矩阵控制
   plugins/              # mathlive 注册
   types/                # 类型定义
   utils/                # SVG 导出、剪贴板、空组恢复等工具

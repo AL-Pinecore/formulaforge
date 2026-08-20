@@ -4,7 +4,10 @@
 
 ## 涉及文件
 
-- `app/components/EquationWorkspace.vue` — 工作区组件（字段初始化、拖放、预览、状态发布）
+- `app/components/EquationWorkspace.vue` — 工作区组件（字段初始化、事件编排、拖放、预览、状态发布）
+- `app/editor/EditorHistory.ts` — 公共 LaTeX + 光标位置的语义历史
+- `app/editor/MathLiveAdapter.ts` — MathLive 公共/私有模型访问的集中适配层
+- `app/editor/SelectionController.ts` — caret 偏移与 placeholder 几何命中
 - `app/components/EquationPalette.vue` — 元素面板（分类、搜索、tooltip、拖拽起点）
 - `app/utils/drag-payload.ts` — 拖拽共享状态（`draggedElementId` + MIME 类型）
 - `app/data/equation-elements.ts` — 200+ 个公式元素的定义
@@ -18,11 +21,11 @@
 
 `useEquation.ts` 在模块层持有 `ref`（`latex` / `errors` / `canUndo` / `canRedo` / `fontSize` / `displayStyle`），`useEquation()` 每次返回同一份引用。所有组件（工作区、工具栏、导出面板）共享同一状态，避免逐层传 props。
 
-工作区通过 `emit('latex-change', value, errors)` 和 `emit('undo-state', ...)` 把公式及语义历史状态回灌给这个单例。
+工作区通过 `emit('latex-change', value, errors)` 和 `emit('undo-state', ...)` 把公式及 `EditorHistory` 的语义历史状态回灌给这个单例。
 
 ### 语义 undo / redo
 
-MathLive 的原生历史会记录 `setValue()`，但 Text 边界 marker、空盒 phantom、placeholder 恢复都需要内部 `setValue()`；直接 `applyStyle()` 又不会建立原生快照。因此工作区禁用 MathLive 历史，在 `publishState()` 汇合点记录最多 1000 个「公共 LaTeX + 光标位置」快照。
+MathLive 的原生历史会记录 `setValue()`，但 Text 边界 marker、空盒 phantom、placeholder 恢复都需要内部 `setValue()`；直接 `applyStyle()` 又不会建立原生快照。因此工作区禁用 MathLive 历史，由 `EditorHistory` 在 `publishState()` 汇合点记录最多 1000 个「公共 LaTeX + 光标位置」快照。
 
 历史只保存 `publicLatex()` 的结果，undo/redo 时再通过 `loadLatex()` 重建 marker、phantom 和 placeholder。这保证内部修复不会成为额外的撤销步骤，同时覆盖键盘输入/删除、面板点击与拖放、Text/Accent 重建、字体样式、矩阵增删、源码编辑、文件导入和清空。建立新快照会丢弃 redo 分支；工具栏及 `Cmd/Ctrl+Z`、`Cmd/Ctrl+Shift+Z`、`Ctrl+Y` 共用同一历史。
 
@@ -50,7 +53,7 @@ MathLive 的原生历史会记录 `setValue()`，但 Text 边界 marker、空盒
 
 插入预览用第二个离屏 `math-field`（`ensureMirrorField`）实现：
 
-1. `updateInsertionPreview` 用 `offsetFromPoint` 算出目标偏移；
+1. `updateInsertionPreview` 用 `SelectionController.offsetFromPoint` 算出目标偏移；
 2. `renderPreview` 把 mirror 覆盖到真实字段上方，`mirror.value = mf.value`，再 `mirror.insert(...)`；
 3. MathLive 异步渲染，所以 `schedulePreviewSnapshot` 用 rAF + `setTimeout(32ms)` 双保险等它 settle，再 `snapshotPreview` 抓取 mirror 的 `.ML__latex` DOM 存为静态 HTML 覆盖显示。
 
@@ -60,7 +63,7 @@ mirror 与真实字段共用同一份 MathLive 渲染器，所以预览「像素
 
 ### 偏移计算 `offsetFromPoint`
 
-MathLive 的 `getOffsetFromPoint` 在上下标/分组下不可靠（很多位置返回 0）。工作区自己实现：`buildOffsetEdges` 遍历每个 offset 的 `getElementInfo(offset).bounds`，用每个原子的左右边缘构建 `OffsetEdge[]`，再按「距点击点最近、深度最大」选择偏移。
+MathLive 的 `getOffsetFromPoint` 在上下标/分组下不可靠（很多位置返回 0）。`SelectionController` 的 `buildOffsetEdges` 遍历每个 offset 的 `getElementInfo(offset).bounds`，用每个原子的左右边缘构建 `OffsetEdge[]`，再按「距点击点最近、深度最大」选择偏移。
 
 ### 反斜杠命令输入
 
@@ -92,4 +95,4 @@ MathLive 的 `getOffsetFromPoint` 在上下标/分组下不可靠（很多位置
 ## 已知边界
 
 - `MAX_MATRIX_COLUMNS = 100`（`EquationWorkspace.vue`）：`ponytail:` 注释标记的实用上限，若公式真的需要 100+ 列再提高。
-- `offsetEdges` 按 `mf.value + 宽度` 做缓存 key，值变化即失效重算。
+- 每个 math-field 的 `offsetEdges` 按 `mf.value + 宽度` 缓存在 `WeakMap` 中，值变化即失效重算。
