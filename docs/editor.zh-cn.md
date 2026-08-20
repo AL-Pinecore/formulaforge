@@ -8,6 +8,7 @@
 - `app/editor/EditorHistory.ts` — 公共 LaTeX + 光标位置的语义历史
 - `app/editor/MathLiveAdapter.ts` — MathLive 公共/私有模型访问的集中适配层
 - `app/editor/SelectionController.ts` — caret 偏移与 placeholder 几何命中
+- `app/editor/TextController.ts` — Text 原子查询、输入/删除重建、空盒与字体样式
 - `app/components/EquationPalette.vue` — 元素面板（分类、搜索、tooltip、拖拽起点）
 - `app/utils/drag-payload.ts` — 拖拽共享状态（`draggedElementId` + MIME 类型）
 - `app/data/equation-elements.ts` — 200+ 个公式元素的定义

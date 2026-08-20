@@ -5,7 +5,7 @@ import { getElementByCommand, getElementById } from '~/data/equation-elements'
 import { DRAG_ELEMENT_MIME, draggedElementId } from '~/utils/drag-payload'
 import { restoreEmptyGroupLatex } from '~/utils/empty-group'
 import { isAccentConstructLatex } from '~/utils/accent'
-import { FONT_STYLES, FONT_STYLE_TEXT_COMMANDS, isFontStyleElement } from '~/utils/font-styles'
+import { FONT_STYLES, isFontStyleElement } from '~/utils/font-styles'
 import { ensurePlaceholderSupport } from '~/utils/mathfield-placeholder'
 import { ensureAccentPositioning } from '~/utils/mathfield-accent'
 import { removeElementAtPlaceholder } from '~/utils/remove-empty-element'
@@ -15,16 +15,9 @@ import { matrixCommandsForKey, type MatrixCommand } from '~/utils/matrix'
 import { unwrapCommandLatex } from '~/utils/unwrap-element'
 import {
   addTextBoundaries,
-  emptyTextSentinelLatex,
   isEmptyTextLatex,
-  isTextCommandLatex,
-  mergeAdjacentTextCommands,
-  removeOrphanedTextBoundaries,
   stripEmptyTextSentinel,
   stripTextBoundaries,
-  TEXT_BOUNDARY_LATEX,
-  textHintFont,
-  textHintText,
   withEmptyTextSentinel,
 } from '~/utils/text-boundary'
 import type { EquationElement } from '~/types/equation'
@@ -49,11 +42,28 @@ import {
   selectPlaceholderAtPoint,
 } from '~/editor/SelectionController'
 import {
-  isMatrix,
   matrixAtPoint,
   matrixContextAtCaret,
   matrixOffsetAtPoint,
 } from '~/editor/MatrixController'
+import {
+  applyFontStyle,
+  clampOffsetOutsideText,
+  collectTextHints,
+  emptyTextGroupAtPoint,
+  emptyTextHintBox,
+  handleEmptyTextNavigation,
+  handleTextDeletion,
+  handleTextInput,
+  normalizePublicLatex,
+  publicStringOffsetToModel,
+  relocateCaretAcrossBoundaries,
+  snapCaretIntoEmptyText,
+  textGroupAtCaret,
+  textGroupNearPosition,
+  textGroupRangeAtPoint,
+  type TextHint,
+} from '~/editor/TextController'
 
 const props = withDefaults(defineProps<{ fontSize: number; displayStyle?: boolean }>(), {
   displayStyle: true,
@@ -100,14 +110,6 @@ let contextUnwrapTarget: UnwrapTarget | null = null
 let contextMatrixTarget: InternalAtom | null = null
 const insertionPreview = ref<string | null>(null)
 const previewBox = ref<{ left: number; top: number; width: number; height: number } | null>(null)
-interface TextHint {
-  left: number
-  top: number
-  width: number
-  height: number
-  text: string
-  font: { fontFamily: string; fontWeight?: number; fontStyle?: string }
-}
 const textHints = ref<TextHint[]>([])
 const previewTextHints = ref<TextHint[]>([])
 const visibleTextHints = computed(() => insertionPreview.value ? previewTextHints.value : textHints.value)
@@ -133,326 +135,6 @@ const history = new EditorHistory()
 
 function getMf(): MathfieldElement | null {
   return mathfield
-}
-
-// The model range of the whole `\text{...}` group containing the given point.
-// Text atoms serialize to `\text{<char>}` per offset and report their bounds,
-// so the atom under the point is found by geometry, then the group's bounds by
-// walking over contiguous text atoms. Empty text boxes contain only invisible
-// phantom atoms without bounds, so they are hit-tested through their two
-// zero-width boundary markers instead.
-function textGroupRangeAtPoint(
-  mf: MathfieldElement,
-  x: number,
-  y: number,
-): [number, number] | null {
-  let atom = -1
-  for (let offset = 0; offset <= mf.lastOffset; offset++) {
-    const info = mf.getElementInfo(offset)
-    const bounds = info?.bounds
-    if (!bounds || bounds.width < 0.5) {
-      continue
-    }
-    if (
-      isTextAtom(mf, offset) &&
-      x >= bounds.left &&
-      x <= bounds.right &&
-      y >= bounds.top &&
-      y <= bounds.bottom
-    ) {
-      atom = offset
-      break
-    }
-  }
-  if (atom < 0) {
-    const emptyGroup = emptyTextGroupAtPoint(mf, x, y)
-    return emptyGroup ? [emptyGroup.start, emptyGroup.end] : null
-  }
-  let start = atom
-  while (start > 0 && isTextAtom(mf, start - 1)) {
-    start--
-  }
-  let end = atom + 1
-  while (end <= mf.lastOffset && isTextAtom(mf, end)) {
-    end++
-  }
-  return [Math.max(0, start - 1), Math.min(end, mf.lastOffset)]
-}
-
-function applyFontStyle(mf: MathfieldElement, id: string, x: number, y: number): boolean {
-  const style = FONT_STYLES[id]
-  if (!style) {
-    return false
-  }
-  const group = textGroupAtPoint(mf, x, y) ?? emptyTextGroupAtPoint(mf, x, y)
-  if (!group) {
-    return false
-  }
-  // Dragging the same style again toggles it back off: `\text{x}` + Bold ->
-  // `\textbf{x}`, and `\textbf{x}` + Bold -> `\text{x}`. Only text-mode
-  // commands toggle; math-font boxes keep the plain apply behavior.
-  const expected = FONT_STYLE_TEXT_COMMANDS[id]
-  const operation: 'set' | 'toggle' =
-    expected != null && group.command === expected ? 'toggle' : 'set'
-  mf.applyStyle(style, { range: [group.start, group.end], operation })
-  return true
-}
-
-// The model range, character count and content of the `\text{...}` group
-// adjacent to the caret. Used to turn a backspace on the last remaining
-// character into an empty text box instead of deleting the whole element.
-interface TextGroup {
-  start: number
-  end: number
-  first: number
-  last: number
-  count: number
-  content: string
-  command: string
-  latex: string
-  bounds: { left: number; top: number; width: number; height: number } | null
-}
-
-function isTextAtom(mf: MathfieldElement, offset: number): boolean {
-  const latex = mf.getElementInfo(offset)?.latex
-  return latex === TEXT_BOUNDARY_LATEX ? false : isTextCommandLatex(latex)
-}
-
-function isTextBoundaryAtom(mf: MathfieldElement, offset: number): boolean {
-  return mf.getElementInfo(offset)?.latex === TEXT_BOUNDARY_LATEX
-}
-
-// A managed boundary is a zero-width marker that is directly attached to a Text
-// atom. Standalone `\mkern0mu` typed by the user keeps its native behavior.
-function isManagedBoundaryAtom(mf: MathfieldElement, offset: number): boolean {
-  if (!isTextBoundaryAtom(mf, offset)) {
-    return false
-  }
-  return isTextAtom(mf, offset - 1) || isTextAtom(mf, offset + 1)
-}
-
-// Move a collapsed caret across managed zero-width boundaries so a native
-// deletion never edits the markers themselves. MathLive's model places the
-// caret AFTER the atom at `position`: Backspace deletes the atom at `position`
-// and Delete the atom at `position + 1`. When that target is a managed marker
-// the caret steps over it: past a right marker into the text (per the user's
-// intent, Delete right after a Text box edits the text), or across a left
-// marker either into the text (Delete) or out of it (Backspace, which then
-// edits whatever precedes the Text box).
-function relocateCaretAcrossBoundaries(
-  mf: MathfieldElement,
-  key: 'Backspace' | 'Delete',
-): number {
-  let position = mf.position
-  for (let guard = 0; guard < 4; guard++) {
-    const target = key === 'Delete' ? position + 1 : position
-    if (!isManagedBoundaryAtom(mf, target)) {
-      break
-    }
-    if (isTextAtom(mf, target - 1)) {
-      // Right boundary: pull the caret into the text.
-      position = key === 'Delete' ? target - 2 : target - 1
-    } else if (isTextAtom(mf, target + 1)) {
-      // Left boundary: Delete steps into the text, Backspace steps out.
-      position = key === 'Delete' ? target : target - 1
-    } else {
-      break
-    }
-    position = Math.max(0, Math.min(mf.lastOffset, position))
-  }
-  return position
-}
-
-function textAtomRunKey(mf: MathfieldElement, offset: number): string {
-  const info = mf.getElementInfo(offset)
-  return JSON.stringify([info?.mode, info?.style ?? null])
-}
-
-function decodeTextAtom(latex: string): string {
-  const open = latex.indexOf('{')
-  if (open < 0 || !latex.endsWith('}')) {
-    return ''
-  }
-  return latex
-    .slice(open + 1, -1)
-    .replace(/\\textbackslash\{\}/g, '\\')
-    .replace(/\\([\^~])\{\}/g, '$1')
-    .replace(/\\([\\{}#$&^_~%])/g, '$1')
-}
-
-function textGroupFromAtom(mf: MathfieldElement, atom: number): TextGroup | null {
-  if (!isTextAtom(mf, atom)) {
-    return null
-  }
-  const runKey = textAtomRunKey(mf, atom)
-  let first = atom
-  while (
-    first > 0 &&
-    isTextAtom(mf, first - 1) &&
-    textAtomRunKey(mf, first - 1) === runKey
-  ) {
-    first--
-  }
-  let last = atom
-  while (
-    last + 1 <= mf.lastOffset &&
-    isTextAtom(mf, last + 1) &&
-    textAtomRunKey(mf, last + 1) === runKey
-  ) {
-    last++
-  }
-  const content: string[] = []
-  let left = Infinity
-  let top = Infinity
-  let right = -Infinity
-  let bottom = -Infinity
-  for (let offset = first; offset <= last; offset++) {
-    const info = mf.getElementInfo(offset)
-    if (info?.latex) {
-      content.push(decodeTextAtom(info.latex))
-    }
-    const bounds = info?.bounds
-    if (bounds) {
-      left = Math.min(left, bounds.left)
-      top = Math.min(top, bounds.top)
-      right = Math.max(right, bounds.right)
-      bottom = Math.max(bottom, bounds.bottom)
-    }
-  }
-  const start = Math.max(0, first - 1)
-  const end = last
-  const serialized = mf.getValue(start, end)
-  const command = serialized.match(/^\\([a-zA-Z]+)\{/)?.[1] ?? 'text'
-  return {
-    start,
-    end,
-    first,
-    last,
-    count: last - first + 1,
-    content: content.join(''),
-    command,
-    latex: serialized,
-    bounds: Number.isFinite(left)
-      ? { left, top, width: right - left, height: bottom - top }
-      : null,
-  }
-}
-
-function textGroupAtCaret(mf: MathfieldElement): TextGroup | null {
-  const pos = mf.position
-  // The branch-start atom immediately before the first text atom is the
-  // insertion point in front of the first character.
-  if (isTextAtom(mf, pos + 1)) {
-    const group = textGroupFromAtom(mf, pos + 1)
-    if (group?.start === pos) {
-      return group
-    }
-  }
-  // A caret on a zero-width marker with text to its right belongs to that
-  // group; with text only to its left (the closing marker), it still belongs
-  // to the group on the left.
-  if (isTextBoundaryAtom(mf, pos) && isTextAtom(mf, pos + 1)) {
-    return textGroupFromAtom(mf, pos + 1)
-  }
-  if (isTextAtom(mf, pos)) {
-    return textGroupFromAtom(mf, pos)
-  }
-  if (isTextAtom(mf, pos - 1)) {
-    return textGroupFromAtom(mf, pos - 1)
-  }
-  return null
-}
-
-function textGroupAtPoint(mf: MathfieldElement, x: number, y: number): TextGroup | null {
-  for (let offset = 0; offset <= mf.lastOffset; offset++) {
-    const info = mf.getElementInfo(offset)
-    const bounds = info?.bounds
-    if (
-      isTextAtom(mf, offset) &&
-      bounds &&
-      x >= bounds.left - 2 &&
-      x <= bounds.right + 2 &&
-      y >= bounds.top - 4 &&
-      y <= bounds.bottom + 4
-    ) {
-      return textGroupFromAtom(mf, offset)
-    }
-  }
-  return null
-}
-
-// The empty text group containing the given point, hit-tested through the
-// zero-width boundary markers around it (the phantom atoms report no bounds).
-function emptyTextGroupAtPoint(mf: MathfieldElement, x: number, y: number): TextGroup | null {
-  const seen = new Set<number>()
-  for (let offset = 0; offset <= mf.lastOffset; offset++) {
-    if (!isTextAtom(mf, offset)) {
-      continue
-    }
-    const group = textGroupFromAtom(mf, offset)
-    if (!group || !isEmptyTextLatex(group.latex) || seen.has(group.first)) {
-      continue
-    }
-    seen.add(group.first)
-    const leftMarker = mf.getElementInfo(group.start - 1)?.bounds
-    const rightMarker = mf.getElementInfo(group.end + 1)?.bounds
-    if (!leftMarker || !rightMarker) {
-      continue
-    }
-    if (
-      x >= leftMarker.right - 2 &&
-      x <= rightMarker.left + 2 &&
-      y >= leftMarker.top - 4 &&
-      y <= leftMarker.bottom + 4
-    ) {
-      return group
-    }
-  }
-  return null
-}
-
-// If the given model offset lies INSIDE a text group, clamp it to just outside
-// the group (before it when the point is in the left half, after it in the
-// right half) so dropped elements never get inserted into text content, where
-// MathLive would re-serialize the whole formula as escaped text.
-function clampOffsetOutsideText(mf: MathfieldElement, offset: number, x?: number): number {
-  if (typeof mf.getElementInfo !== 'function') {
-    return offset
-  }
-  for (let atom = Math.max(0, Math.min(offset, mf.lastOffset)); atom >= 0; atom--) {
-    if (!isTextAtom(mf, atom)) {
-      continue
-    }
-    const group = textGroupFromAtom(mf, atom)
-    if (!group || offset < group.start || offset > group.end) {
-      continue
-    }
-    const leftMarker = mf.getElementInfo(group.start - 1)?.bounds
-    const rightMarker = mf.getElementInfo(group.end + 1)?.bounds
-    const center = leftMarker && rightMarker ? (leftMarker.right + rightMarker.left) / 2 : null
-    const insertAfter =
-      x == null || center == null ? true : x >= center
-    return Math.max(0, Math.min(mf.lastOffset, insertAfter ? group.end + 1 : group.start))
-  }
-  return offset
-}
-
-// The text group containing or directly adjacent to the given caret position.
-function textGroupNearPosition(mf: MathfieldElement, position: number): TextGroup | null {
-  for (let offset = 0; offset <= mf.lastOffset; offset++) {
-    if (!isTextAtom(mf, offset)) {
-      continue
-    }
-    const group = textGroupFromAtom(mf, offset)
-    if (!group) {
-      continue
-    }
-    if (position >= group.start - 1 && position <= group.end + 1) {
-      return group
-    }
-    offset = group.last
-  }
-  return null
 }
 
 function emitUndoState() {
@@ -483,55 +165,6 @@ function publicLatex(mf: MathfieldElement): string {
       ),
     ),
   )
-}
-
-// The visual box reserved by an empty Text group, derived from its managed
-// zero-width boundary markers because phantom atoms report no bounds.
-interface VisualBox {
-  left: number
-  top: number
-  width: number
-  height: number
-}
-
-function emptyTextHintBox(mf: MathfieldElement, group: TextGroup): VisualBox | null {
-  const leftMarker = mf.getElementInfo(group.start - 1)?.bounds
-  const rightMarker = mf.getElementInfo(group.end + 1)?.bounds
-  if (!leftMarker || !rightMarker) {
-    return null
-  }
-  return {
-    left: leftMarker.right,
-    top: leftMarker.top,
-    width: Math.max(0, rightMarker.left - leftMarker.right),
-    height: leftMarker.bottom - leftMarker.top,
-  }
-}
-
-// The empty Text box keeps an invisible `\phantom{Text}` so the gray "Text"
-// hint overlaid at its position has room and pushes the surrounding content.
-// The hint stays visible while the box is empty — even while the caret sits
-// inside it — and disappears as soon as real content is typed (the phantom
-// atoms are replaced, so the scan below no longer matches).
-function collectTextHints(mf: MathfieldElement): TextHint[] {
-  const hints: TextHint[] = []
-  if (typeof mf.getElementInfo !== 'function') return hints
-  const seen = new Set<number>()
-  for (let offset = 0; offset <= mf.lastOffset; offset++) {
-    if (!isTextAtom(mf, offset)) {
-      continue
-    }
-    const group = textGroupFromAtom(mf, offset)
-    if (!group || !isEmptyTextLatex(group.latex) || seen.has(group.first)) {
-      continue
-    }
-    seen.add(group.first)
-    const box = emptyTextHintBox(mf, group)
-    if (box) {
-      hints.push({ ...box, text: textHintText(group.command), font: textHintFont(group.command) })
-    }
-  }
-  return hints
 }
 
 function updateTextHints() {
@@ -679,93 +312,6 @@ function scheduleUpdateTextHints() {
 }
 
 const PLACEHOLDER_LATEX_RE = /^\\placeholder(?:\[[^\]]*\])?\{\}$/
-
-// The empty text box has no placeholder capture, but its interior spans
-// several phantom atoms; arrow keys are handled manually so a single press
-// leaves the box on either side.
-function emptyTextGroupAtCaret(mf: MathfieldElement): TextGroup | null {
-  if (!mf.selectionIsCollapsed) {
-    return null
-  }
-  const group = textGroupAtCaret(mf)
-  if (!group || !isEmptyTextLatex(group.latex)) {
-    return null
-  }
-  if (mf.position < group.start || mf.position > group.end) {
-    return null
-  }
-  return group
-}
-
-// Move the caret to the Text branch start, in front of the first phantom
-// character and therefore in front of the gray "Text" word.
-function snapCaretIntoEmptyText(mf: MathfieldElement): boolean {
-  for (let offset = 0; offset <= mf.lastOffset; offset++) {
-    if (!isTextAtom(mf, offset)) {
-      continue
-    }
-    const group = textGroupFromAtom(mf, offset)
-    if (!group || !isEmptyTextLatex(group.latex)) {
-      continue
-    }
-    mf.position = Math.min(group.start, mf.lastOffset)
-    return true
-  }
-  return false
-}
-
-// The public form of an internal value: orphan markers dropped, boundary
-// markers stripped, adjacent same-command text boxes merged. Both the model
-// normalization and the caret prefix mapping must use this exact pipeline so
-// string lengths stay comparable.
-function normalizePublicLatex(latex: string): string {
-  return mergeAdjacentTextCommands(stripTextBoundaries(removeOrphanedTextBoundaries(latex)))
-}
-
-// MathLive can re-arrange the zero-width markers when text is inserted around
-// them (duplicating the left marker and dropping the right one); rebuild the
-// marker layout from the current value.
-function normalizeTextModel(mf: MathfieldElement): void {
-  const fixed = addTextBoundaries(normalizePublicLatex(mf.value))
-  if (fixed !== mf.value) {
-    mf.setValue(fixed, { mode: 'math', silenceNotifications: true })
-  }
-}
-
-// After a text rebuild, put the caret after the character at `charIndex`
-// (0-based) inside the group whose serialized form is `groupLatex`. Adjacent
-// boxes may have been merged into a larger one by the normalization, so fall
-// back to locating the content inside the merged group.
-function placeCaretInTextGroup(mf: MathfieldElement, groupLatex: string, charIndex: number): void {
-  const content = groupLatex.slice(groupLatex.indexOf('{') + 1, -1)
-  let fallback: { offset: number; index: number } | null = null
-  for (let offset = 0; offset <= mf.lastOffset; offset++) {
-    if (!isTextAtom(mf, offset)) {
-      continue
-    }
-    const group = textGroupFromAtom(mf, offset)
-    if (!group) {
-      continue
-    }
-    if (group.latex === groupLatex) {
-      mf.position = Math.min(group.first + charIndex, mf.lastOffset)
-      return
-    }
-    if (fallback) {
-      continue
-    }
-    const index = group.content.indexOf(content)
-    if (index >= 0) {
-      fallback = { offset, index }
-    }
-  }
-  if (fallback) {
-    const group = textGroupFromAtom(mf, fallback.offset)
-    if (group) {
-      mf.position = Math.min(group.first + fallback.index + charIndex, mf.lastOffset)
-    }
-  }
-}
 
 function syncPlaceholderSelected() {
   const mf = getMf()
@@ -1473,22 +1019,6 @@ function restoreEmptyGroups(mf: MathfieldElement) {
   }
 }
 
-function publicStringOffsetToModel(mf: MathfieldElement, stringOffset: number): number {
-  let bestOffset = 0
-  let bestDistance = Infinity
-  for (let offset = 0; offset <= mf.lastOffset; offset++) {
-    const length = normalizePublicLatex(mf.getValue(0, offset)).length
-    if (length <= stringOffset) {
-      const distance = stringOffset - length
-      if (distance < bestDistance) {
-        bestDistance = distance
-        bestOffset = offset
-      }
-    }
-  }
-  return bestOffset
-}
-
 const CARET_MARKER = '\\bigstar'
 
 // Locate the placeholder under the caret in the serialized LaTeX. Model
@@ -1935,30 +1465,6 @@ function attachImeBlocker(mf: MathfieldElement) {
   )
 }
 
-function insertMathChar(mf: MathfieldElement, event: KeyboardEvent): void {
-  event.preventDefault()
-  event.stopPropagation()
-  // Raw braces are LaTeX grouping tokens, so inserting `{`/`}` through the
-  // programmatic API produces no visible atom. Use their explicit math
-  // commands when a brace is typed just outside a Text box.
-  const latex = event.key === '{' ? '\\lbrace' : event.key === '}' ? '\\rbrace' : event.key
-  mf.insert(latex, {
-    insertionMode: 'replaceSelection',
-    format: event.key === '{' || event.key === '}' ? 'latex' : 'auto',
-    mode: 'math',
-    silenceNotifications: true,
-  })
-  publishState(mf)
-  scheduleUpdateTextHints()
-}
-
-// The caret sits immediately in front of a Text box, past its leading
-// zero-width marker. MathLive's own handling would let smart-fence characters
-// (parens, brackets, ...) wrap the whole box instead of inserting before it.
-function isCaretBeforeTextBox(mf: MathfieldElement): boolean {
-  return isTextBoundaryAtom(mf, mf.position + 1) && isTextAtom(mf, mf.position + 2)
-}
-
 function handleKeydown(event: KeyboardEvent) {
   const mf = getMf()
   if (!mf || !mf.hasFocus()) {
@@ -1974,112 +1480,18 @@ function handleKeydown(event: KeyboardEvent) {
   ) {
     if (completeCommand(mf, event)) return
   }
-  // Typing into a `\text{...}` box: MathLive collapses a single-atom text
-  // command and drops the `\text{}` wrapper, so intercept every printable
-  // character in a text context and rebuild the whole text group ourselves.
-  if (
-    event.key.length === 1 &&
-    !event.ctrlKey &&
-    !event.metaKey &&
-    !event.altKey &&
-    !event.isComposing
-  ) {
-    const group = textGroupAtCaret(mf)
-    if (group) {
-      const sel = mf.selection?.ranges?.[0]
-      // Rebuilding a text group is only safe when the selection lies entirely
-      // inside it; let MathLive handle selections that span other content.
-      if (sel && sel[1] > sel[0] && (sel[0] < group.start || sel[1] > group.end)) {
-        return
-      }
-      const arrowedOut =
-        caretArrivedByNavigation &&
-        mf.selectionIsCollapsed &&
-        !mf.classList.contains('caret-in-text') &&
-        ((lastArrowDirection === 'right' && mf.position >= group.end) ||
-          (lastArrowDirection === 'left' && mf.position <= group.start))
-      if (isEmptyTextLatex(group.latex) || arrowedOut) {
-        if (!mf.selectionIsCollapsed) {
-          return
-        }
-        // A caret collapsed OUTSIDE the box (or one that just arrowed past its
-        // last character) types in math mode instead of into the text box. The
-        // inside range starts at the Text branch-start atom, immediately
-        // before its first character. `arrowedOut` must be trusted even when
-        // MathLive reports the same numeric edge offset on both sides, so it
-        // short-circuits into a math insert.
-        if (
-          arrowedOut ||
-          mf.position < group.start ||
-          mf.position > group.end
-        ) {
-          // Park the caret just beyond the zero-width boundary marker before
-          // inserting; the edge offset alone does not reliably identify which
-          // side of the marker MathLive selected.
-          if (arrowedOut) {
-            mf.position =
-              lastArrowDirection === 'right'
-                ? Math.min(group.end + 1, mf.lastOffset)
-                : Math.max(0, group.start - 1)
-          }
-          insertMathChar(mf, event)
-          return
-        }
-        event.preventDefault()
-        event.stopPropagation()
-        const escaped = event.key.replace(/([\\{}#$&^_~%])/g, '\\$1')
-        mf.selection = { ranges: [[group.start, group.end]] }
-        mf.insert(`\\${group.command}{${escaped}}`, {
-          insertionMode: 'replaceSelection',
-          mode: 'math',
-          format: 'latex',
-          silenceNotifications: true,
-        })
-        normalizeTextModel(mf)
-        placeCaretInTextGroup(mf, `\\${group.command}{${escaped}}`, 0)
-        publishState(mf)
-        syncCaretInText()
-        scheduleUpdateTextHints()
-        return
-      }
-      event.preventDefault()
-      event.stopPropagation()
-      const escaped = event.key.replace(/([\\{}#$&^_~%])/g, '\\$1')
-      let from = 0
-      let content: string
-      if (sel && sel[1] > sel[0]) {
-        from = Math.max(0, sel[0] - group.start)
-        const to = Math.min(group.content.length, sel[1] - group.start)
-        content = group.content.slice(0, from) + escaped + group.content.slice(to)
-      } else {
-        from = Math.max(0, Math.min(group.content.length, mf.position - group.start))
-        content =
-          group.content.slice(0, from) + escaped + group.content.slice(from)
-      }
-      mf.selection = { ranges: [[group.start, group.end]] }
-      mf.insert(`\\${group.command}{${content}}`, {
-        insertionMode: 'replaceSelection',
-        mode: 'math',
-        format: 'latex',
-        silenceNotifications: true,
-      })
-      normalizeTextModel(mf)
-      // Put the caret right after the inserted character (not at the end).
-      placeCaretInTextGroup(mf, `\\${group.command}{${content}}`, from)
-      publishState(mf)
-      syncCaretInText()
-      scheduleUpdateTextHints()
-      return
-    }
-    if (isCaretBeforeTextBox(mf)) {
-      // The caret is just before a Text box: a printable character here types
-      // in math mode. Route it through the explicit math insert so fence
-      // characters are not captured by MathLive's smart-fence, which would
-      // otherwise wrap the adjacent Text box.
-      insertMathChar(mf, event)
-      return
-    }
+  const textInput = handleTextInput(
+    mf,
+    event,
+    caretArrivedByNavigation,
+    lastArrowDirection,
+  )
+  if (textInput === 'changed') {
+    publishState(mf)
+    syncCaretInText()
+    scheduleUpdateTextHints()
   }
+  if (textInput !== 'continue') return
   // Escape the empty text box: its interior spans the invisible phantom atoms,
   // so a single arrow press jumps out on either side (right before the closing
   // boundary, left before the opening one) where typing lands in math mode.
@@ -2098,12 +1510,8 @@ function handleKeydown(event: KeyboardEvent) {
       onSelectionChange()
       return
     }
-    const box = emptyTextGroupAtCaret(mf)
-    if (box) {
-      event.preventDefault()
-      event.stopPropagation()
-      const target = event.key === 'ArrowRight' ? box.end + 1 : box.start - 1
-      mf.position = Math.max(0, Math.min(mf.lastOffset, target))
+    const textNavigation = handleEmptyTextNavigation(mf, event)
+    if (textNavigation === 'changed') {
       publishState(mf)
       scheduleUpdateTextHints()
       return
@@ -2227,110 +1635,13 @@ function handleKeydown(event: KeyboardEvent) {
     scheduleUpdateTextHints()
     return
   }
-  let targetGroup = isTextAtom(mf, target) ? textGroupFromAtom(mf, target) : null
-  if (!targetGroup && mf.getElementInfo(target)?.latex === '') {
-    // The deletion points at the empty container atom in front of a text group
-    // (e.g. Delete with the caret just before the box); treat it as the group.
-    targetGroup = isTextAtom(mf, target + 1) ? textGroupFromAtom(mf, target + 1) : null
-  }
-  // Deleting anywhere in an empty Text box removes the whole box (with its
-  // markers) and leaves the caret at the deletion point.
-  const emptyBox = emptyTextGroupAtCaret(mf)
-  if (
-    mf.selectionIsCollapsed &&
-    (emptyBox || (targetGroup && isEmptyTextLatex(targetGroup.latex)))
-  ) {
-    const group = emptyBox ?? targetGroup!
-    event.preventDefault()
-    event.stopPropagation()
-    // Partial getValue() ranges inside matrix branches serialize as empty;
-    // remove the Text box from the complete formula so its matrix survives.
-    const wrapped = `${TEXT_BOUNDARY_LATEX}${group.latex}${TEXT_BOUNDARY_LATEX}`
-    let occurrence = 0
-    for (let offset = 0; offset < group.first; offset++) {
-      const earlier = textGroupFromAtom(mf, offset)
-      if (earlier?.first === offset && earlier.latex === group.latex) occurrence++
-    }
-    let stringIndex = -1
-    for (let i = 0; i <= occurrence; i++) {
-      stringIndex = mf.value.indexOf(wrapped, stringIndex + 1)
-    }
-    if (stringIndex < 0) return
-    const matrixContext = matrixContextAtCaret(mf)
-    const matrices = internalModel(mf)?.atoms?.filter(isMatrix) ?? []
-    const matrixIndex = matrixContext ? matrices.indexOf(matrixContext.matrix) : -1
-    const caretPublicLength = normalizePublicLatex(mf.value.slice(0, stringIndex)).length
-    const withoutText = normalizePublicLatex(
-      mf.value.slice(0, stringIndex) + mf.value.slice(stringIndex + wrapped.length),
-    )
-    const restored = restoreEmptyGroupLatex(withoutText) ?? withoutText
-    mf.setValue(addTextBoundaries(restored), { mode: 'math', silenceNotifications: true })
-    ensureMathMode(mf)
-    const model = internalModel(mf)
-    const matrix = matrixIndex >= 0 ? model?.atoms?.filter(isMatrix)[matrixIndex] : null
-    const placeholder =
-      matrixContext && matrix
-        ? matrix
-            .getCell(matrixContext.row, matrixContext.column)
-            ?.find((atom) => atom.type === 'placeholder')
-        : null
-    if (model && placeholder) {
-      const offset = model.offsetOf(placeholder)
-      mf.selection = { ranges: [[offset - 1, offset]] }
-    } else {
-      mf.position = publicStringOffsetToModel(mf, caretPublicLength)
-    }
+  const textDeletion = handleTextDeletion(mf, event, target)
+  if (textDeletion === 'changed') {
     publishState(mf)
     syncCaretInText()
     scheduleUpdateTextHints()
-    return
   }
-  if (targetGroup && targetGroup.count === 1 && !isEmptyTextLatex(targetGroup.latex)) {
-    // Deleting the last remaining character of a `\text{...}` box (from either
-    // direction) turns it into an empty box (showing the "Text" hint) instead
-    // of deleting the whole element; MathLive collapses a single-atom text
-    // command. The group's command is preserved so styled text keeps its style.
-    event.preventDefault()
-    event.stopPropagation()
-    mf.selection = { ranges: [[targetGroup.start, targetGroup.end]] }
-    mf.insert(`\\${targetGroup.command}{${emptyTextSentinelLatex(targetGroup.command)}}`, {
-      insertionMode: 'replaceSelection',
-      mode: 'math',
-      format: 'latex',
-      silenceNotifications: true,
-    })
-    // Park the caret in front of the gray "Text" hint again.
-    snapCaretIntoEmptyText(mf)
-    publishState(mf)
-    syncCaretInText()
-    scheduleUpdateTextHints()
-    return
-  }
-  if (targetGroup && targetGroup.count > 1) {
-    // Rebuild the group without the character under the key so the caret ends
-    // up exactly at the deletion point (MathLive's native in-text deletion
-    // drifts the caret one position).
-    const index = Math.max(0, Math.min(targetGroup.content.length - 1, target - targetGroup.first))
-    if (index >= 0 && index < targetGroup.content.length) {
-      event.preventDefault()
-      event.stopPropagation()
-      const content =
-        targetGroup.content.slice(0, index) + targetGroup.content.slice(index + 1)
-      mf.selection = { ranges: [[targetGroup.start, targetGroup.end]] }
-      mf.insert(`\\${targetGroup.command}{${content}}`, {
-        insertionMode: 'replaceSelection',
-        mode: 'math',
-        format: 'latex',
-        silenceNotifications: true,
-      })
-      normalizeTextModel(mf)
-      placeCaretInTextGroup(mf, `\\${targetGroup.command}{${content}}`, Math.max(0, index - 1))
-      publishState(mf)
-      syncCaretInText()
-      scheduleUpdateTextHints()
-      return
-    }
-  }
+  if (textDeletion !== 'continue') return
   if (!isPlaceholder) {
     if (event.key === 'Backspace') {
       // Backspace on the last remaining character of a `\sqrt[n]{...}` index

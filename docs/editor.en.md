@@ -8,6 +8,7 @@ Purpose: the core editing surface. Palette elements are dragged into the `<math-
 - `app/editor/EditorHistory.ts` — semantic public-LaTeX + caret-position history
 - `app/editor/MathLiveAdapter.ts` — centralized MathLive public/private model access
 - `app/editor/SelectionController.ts` — caret-offset and placeholder geometry
+- `app/editor/TextController.ts` — text atom queries, input/delete rebuilding, empty boxes, and font styles
 - `app/components/EquationPalette.vue` — element palette (categories, search, tooltip, drag origin)
 - `app/utils/drag-payload.ts` — shared drag state (`draggedElementId` + MIME type)
 - `app/data/equation-elements.ts` — definitions of 200+ elements

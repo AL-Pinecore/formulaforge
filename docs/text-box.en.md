@@ -6,7 +6,8 @@ Purpose: the editing mechanics of `\text{...}` and font-style commands (`\textbf
 
 - `app/utils/text-boundary.ts` — boundary markers, empty-box sentinel, command sets, serialization pipeline
 - `app/utils/font-styles.ts` — mapping font-style elements onto text boxes
-- `app/components/EquationWorkspace.vue` — text atom reading, delete/input rebuilding
+- `app/editor/TextController.ts` — text atom queries, delete/input rebuilding, hit-testing, and font styles
+- `app/components/EquationWorkspace.vue` — keyboard orchestration, history publishing, and visual overlays
 
 ## How it works
 
@@ -48,10 +49,10 @@ Model normalization and caret-prefix mapping must use the same pipeline so strin
 
 ### Delete/input rebuilding
 
-MathLive serializes each text character as a separate `\text{<char>}` atom; a single-atom text command gets collapsed and the `\text{}` wrapper dropped. The workspace therefore intercepts every printable character in a text context and rebuilds the whole group itself:
+MathLive serializes each text character as a separate `\text{<char>}` atom; a single-atom text command gets collapsed and the `\text{}` wrapper dropped. `TextController` therefore intercepts printable characters and deletion keys in a text context and rebuilds the whole group itself:
 
 - `textGroupFromAtom` collects contiguous text atoms by their "mode + style" run key, joining the content and the `\text{...}` group range;
-- `handleKeydown`, when inside a text group, takes `group.content`, inserts/deletes the character, and replaces the whole group via `mf.insert(\<command>{<content>})`, then repositions the caret with `placeCaretInTextGroup`.
+- `handleTextInput` / `handleTextDeletion` take `group.content`, insert/delete the character, replace the whole group via `mf.insert(\<command>{<content>})`, and reposition the caret with `placeCaretInTextGroup`; their `changed` / `handled` / `continue` result tells the workspace whether to publish history.
 
 ### Font-style drag
 
@@ -67,4 +68,4 @@ MathLive serializes each text character as a separate `\text{<char>}` atom; a si
 
 - Adjacent text boxes whose content contains braces are not merged by `mergeAdjacentTextCommands` (the regex deliberately skips `{...}` content).
 - `\operatorname` is treated as opaque via `OPAQUE_TEXT_COMMANDS` and copied through untouched, to avoid corrupting integral limits and similar re-serializations.
-- Clearing the whole field does not reset MathLive's model `mode` (`math`/`text`/`latex`); a field emptied while its caret was in a text box keeps `text` mode and wraps the next input in `\text{}`. `EquationWorkspace.ensureMathMode` resets it to `math` when the content is empty (only `text` is reset — an in-progress backslash command's `latex` mode is left alone).
+- Clearing the whole field does not reset MathLive's model `mode` (`math`/`text`/`latex`); a field emptied while its caret was in a text box keeps `text` mode and wraps the next input in `\text{}`. `MathLiveAdapter.ensureMathMode` resets it to `math` when the content is empty (only `text` is reset — an in-progress backslash command's `latex` mode is left alone).
