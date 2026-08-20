@@ -9,6 +9,16 @@
 
 ## 工作机制
 
+### 可移植 LaTeX
+
+工作区的 `publicLatex` 在内容离开 MathLive 前统一转成主流写法，所以源码面板、复制、`.tex`、预览和导出得到同一个值：
+
+- 带参数的 `\longleftarrow[下]{上}` / `\longrightarrow[下]{上}` → `\xleftarrow` / `\xrightarrow`；
+- `\exponentialE`、`\imaginaryI/J`、`\differentialD` 等 MathLive ISO 标识符 → `\mathrm{e/i/j/d/D}`；
+- `\degree` → `{}^{\circ}`。
+
+无参数的普通 `\longleftarrow` / `\longrightarrow` 保持不变。内部编辑占位符和 Text 边界标记也在这里剥离。
+
 ### 双缓冲 `draft` / `editing`
 
 `draft` 是 textarea 绑定值，`editing` 标记是否正在编辑。`watch(latex)` 只在 `!editing` 且值不同时同步 `draft`——避免字段变化时打断用户正在输入的内容。`onInput` 把草稿 `emit('apply', draft)` 回灌到工作区，`onBlur` 把 `draft` 重置为当前 latex（放弃草稿态）。

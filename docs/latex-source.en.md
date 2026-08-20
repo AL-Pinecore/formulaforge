@@ -9,6 +9,16 @@ Purpose: the LaTeX source textarea on the right — view/edit the source, copy i
 
 ## How it works
 
+### Portable LaTeX
+
+The workspace's `publicLatex` converts MathLive output to mainstream notation before it leaves the editor, so the source panel, clipboard, `.tex`, preview, and exports all receive the same value:
+
+- annotated `\longleftarrow[below]{above}` / `\longrightarrow[below]{above}` → `\xleftarrow` / `\xrightarrow`;
+- MathLive ISO identifiers such as `\exponentialE`, `\imaginaryI/J`, and `\differentialD` → `\mathrm{e/i/j/d/D}`;
+- `\degree` → `{}^{\circ}`.
+
+Plain `\longleftarrow` / `\longrightarrow` commands without arguments remain unchanged. Internal editing placeholders and Text boundary markers are also removed here.
+
 ### Double buffer `draft` / `editing`
 
 `draft` is the textarea's bound value; `editing` marks whether the user is actively editing. `watch(latex)` only syncs `draft` when `!editing` and the values differ — so field changes never clobber the user's in-progress input. `onInput` emits `apply` with the draft to feed the workspace; `onBlur` resets `draft` to the current latex (discarding the draft state).

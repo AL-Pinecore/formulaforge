@@ -1546,6 +1546,19 @@ test('renders the MathJax SVG preview from raw LaTeX input', async ({ page, goto
   expect(await previewSvg.count()).toBeGreaterThan(0)
 })
 
+test('renders MathLive labels above and below long arrows', async ({ page, goto }) => {
+  await goto('/', { waitUntil: 'hydration' })
+  const textarea = page.locator('.latex-textarea')
+  await insertElement(page, 'Long right arrow', 'Arrows')
+  await expect(textarea).toHaveValue('\\xrightarrow{}')
+  await textarea.fill('\\longleftarrow[below]{above}')
+  await textarea.blur()
+  await expect(textarea).toHaveValue('\\xleftarrow[below]{above}')
+  const preview = page.locator('.math-preview-canvas')
+  await expect(preview.locator('[data-mml-node="munderover"]')).toBeVisible({ timeout: 15000 })
+  await expect(preview.locator('[data-mml-node="merror"]')).toHaveCount(0)
+})
+
 test('palette scrolls independently at a short viewport', async ({ page, goto }) => {
   await page.setViewportSize({ width: 1360, height: 600 })
   await goto('/', { waitUntil: 'hydration' })

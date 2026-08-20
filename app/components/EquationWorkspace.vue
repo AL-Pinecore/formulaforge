@@ -9,7 +9,8 @@ import { FONT_STYLES, FONT_STYLE_TEXT_COMMANDS, isFontStyleElement } from '~/uti
 import { ensurePlaceholderSupport } from '~/utils/mathfield-placeholder'
 import { ensureAccentPositioning } from '~/utils/mathfield-accent'
 import { removeElementAtPlaceholder } from '~/utils/remove-empty-element'
-import { normalizeDifferential } from '~/utils/latex-normalize'
+import { normalizePortableLatex } from '~/utils/latex-normalize'
+import { DISABLED_LATEX_AUTOCOMPLETE_COMMANDS } from '~/utils/latex-autocomplete'
 import { matrixCommandsForKey, type MatrixCommand } from '~/utils/matrix'
 import {
   addTextBoundaries,
@@ -567,7 +568,7 @@ function publishState(mf: MathfieldElement, record = true) {
 }
 
 function publicLatex(mf: MathfieldElement): string {
-  return normalizeDifferential(
+  return normalizePortableLatex(
     stripEmptyTextSentinel(
       stripTextBoundaries(mf.getValue('latex-without-placeholders')).replace(
         /\\placeholder(?:\[[^\]]*\])?\{\}/g,
@@ -1481,6 +1482,12 @@ function completeCommand(mf: MathfieldElement, event: KeyboardEvent): boolean {
     void insertElement(element)
     return true
   }
+  if (DISABLED_LATEX_AUTOCOMPLETE_COMMANDS.has(name)) {
+    event.preventDefault()
+    event.stopPropagation()
+    mf.executeCommand(['complete', 'reject'])
+    return true
+  }
   if (STYLE_SWITCH_COMMANDS.has(name)) {
     completeStyleSwitch(mf, name, event)
     return true
@@ -1574,6 +1581,20 @@ function typedCommandName(mf: MathfieldElement): string | null {
     .map((atom) => atom.value ?? '')
     .join('')
   return command.match(/^\\([a-zA-Z]+)/)?.[1] ?? null
+}
+
+function onSuggestionClick(event: MouseEvent): void {
+  const item = (event.target as Element | null)?.closest<HTMLElement>(
+    '#mathlive-suggestion-popover [data-command]',
+  )
+  const name = item?.dataset.command?.match(/^\\([a-zA-Z]+)/)?.[1]
+  const mf = getMf()
+  if (!name || !DISABLED_LATEX_AUTOCOMPLETE_COMMANDS.has(name) || mf?.mode !== 'latex') {
+    return
+  }
+  event.preventDefault()
+  event.stopImmediatePropagation()
+  mf.executeCommand(['complete', 'reject'])
 }
 
 const RESTORE_PLACEHOLDER_GLOBAL_RE = /\\placeholder(?:\[[^\]]*\])?\{\}/g
@@ -2985,11 +3006,13 @@ function setDisplayStyle(value: boolean) {
 
 onMounted(() => {
   window.addEventListener('keydown', onWindowKeydown)
+  document.addEventListener('click', onSuggestionClick, true)
   void ensureMathfield()
 })
 
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', onWindowKeydown)
+  document.removeEventListener('click', onSuggestionClick, true)
   disposed = true
   cancelAnimationFrame(previewRaf)
   cancelAnimationFrame(snapshotRaf)

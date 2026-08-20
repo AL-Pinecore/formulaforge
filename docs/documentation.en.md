@@ -13,6 +13,7 @@ Each doc focuses on the implementation mechanics of one feature (files involved,
 | [LaTeX Rendering & Live Preview](rendering.en.md) | MathJax loading, SVG pipeline, MathPreview debounce, MathChip scaling |
 | [Multi-Format Export](export.en.md) | browser and Rust export paths, SVG validation, atomic write, concurrency guard |
 | [LaTeX Source Panel & Clipboard](latex-source.en.md) | source double buffer, three copy formats, `.tex` import/export |
+| [Backslash Autocomplete Compatibility Blocklist](latex-autocomplete-compatibility.en.md) | MathLive completion audit rule, disabled behavior, and full command list |
 | [Internationalization (i18n)](i18n.en.md) | locale auto-discovery, `t()` fallback chain, MathLive string overrides, adding a language |
 | [Theme System](theme.en.md) | `data-theme` + CSS variables, localStorage persistence, early apply |
 | [Desktop Integration & Input Method](desktop-ime.en.md) | Tauri command registration, macOS input-source switching, JS-layer IME blocking |

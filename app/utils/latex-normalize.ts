@@ -2,9 +2,20 @@
 // panel, clipboard, .tex export, preview and image/PDF export), so the output
 // is portable to external LaTeX tooling and renderers.
 
-// MathLive serializes its ISO upright differential as `\differentialD`, a
-// MathLive-only command that neither MathJax nor standard LaTeX understands.
-// Rewrite it to the standard `\mathrm{d}` before publishing.
-export function normalizeDifferential(latex: string): string {
-  return latex.replace(/\\differentialD/g, '\\mathrm{d}')
+const PORTABLE_COMMANDS: Record<string, string> = {
+  '\\exponentialE': '\\mathrm{e}',
+  '\\imaginaryI': '\\mathrm{i}',
+  '\\imaginaryJ': '\\mathrm{j}',
+  '\\differentialD': '\\mathrm{d}',
+  '\\capitalDifferentialD': '\\mathrm{D}',
+  '\\degree': '{}^{\\circ}',
+}
+
+export function normalizePortableLatex(latex: string): string {
+  return latex
+    .replace(
+      /\\(?:exponentialE|imaginaryI|imaginaryJ|differentialD|capitalDifferentialD|degree)\b/g,
+      (command) => PORTABLE_COMMANDS[command] ?? command,
+    )
+    .replace(/\\long(left|right)arrow(?=\s*(?:\[|\{))/g, '\\x$1arrow')
 }

@@ -1,19 +1,26 @@
 import { describe, expect, it } from 'vitest'
-import { normalizeDifferential } from '~/utils/latex-normalize'
+import { normalizePortableLatex } from '~/utils/latex-normalize'
 
-describe('normalizeDifferential', () => {
-  it('rewrites MathLive differential to standard upright d', () => {
-    expect(normalizeDifferential('\\int \\differentialD x')).toBe('\\int \\mathrm{d} x')
+describe('normalizePortableLatex', () => {
+  it('rewrites MathLive-only identifiers to standard LaTeX', () => {
+    expect(
+      normalizePortableLatex(
+        '\\exponentialE \\imaginaryI \\imaginaryJ \\differentialD \\capitalDifferentialD \\degree',
+      ),
+    ).toBe('\\mathrm{e} \\mathrm{i} \\mathrm{j} \\mathrm{d} \\mathrm{D} {}^{\\circ}')
   })
 
-  it('rewrites every occurrence', () => {
-    expect(normalizeDifferential('\\differentialD x \\differentialD y')).toBe(
-      '\\mathrm{d} x \\mathrm{d} y',
+  it('uses mainstream extensible-arrow commands for MathLive long-arrow arguments', () => {
+    expect(normalizePortableLatex('\\longleftarrow[below]{above} + \\longrightarrow{}')).toBe(
+      '\\xleftarrow[below]{above} + \\xrightarrow{}',
+    )
+    expect(normalizePortableLatex('\\longleftarrow + \\longrightarrow')).toBe(
+      '\\longleftarrow + \\longrightarrow',
     )
   })
 
   it('leaves unrelated LaTeX untouched', () => {
-    expect(normalizeDifferential('\\frac{a}{b}')).toBe('\\frac{a}{b}')
-    expect(normalizeDifferential('\\mathrm{d}')).toBe('\\mathrm{d}')
+    expect(normalizePortableLatex('\\frac{a}{b}')).toBe('\\frac{a}{b}')
+    expect(normalizePortableLatex('\\mathrm{d}')).toBe('\\mathrm{d}')
   })
 })

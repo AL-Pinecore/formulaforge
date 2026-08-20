@@ -16,7 +16,7 @@
 
 MathJax 以 vendor 资源打包在 `public/mathjax/`（`copy-vendor-assets.mjs` 从 node_modules 拷贝）。`ensureMathJax` 懒加载 `tex-svg.js` 脚本，缓存 `loadPromise`，失败时清空以允许重试。
 
-配置关键点：`tex.macros = { differentialD: '\mathrm{d}' }`——MathLive 把它的 ISO 直立微分序列化成 `\differentialD`，MathJax 不认识，这里映射成标准 `\mathrm{d}`。字体路径 `loader.paths.fonts = ''` 让动态字形从根路径加载。
+字体路径 `loader.paths.fonts = ''` 让动态字形从根路径加载。MathLive 专有命令在工作区的公共 LaTeX 边界统一转成主流写法，详见 `latex-source.zh-cn.md`。
 
 ### SVG 渲染（`renderEquationSvg`）
 
@@ -40,7 +40,7 @@ MathJax 以 vendor 资源打包在 `public/mathjax/`（`copy-vendor-assets.mjs` 
 
 ## 设计取舍
 
-- **渲染器分工**：编辑用 MathLive（交互）、输出用 MathJax（排版质量）。`\differentialD` 宏在两个渲染器间抹平差异。
+- **渲染器分工**：编辑用 MathLive（交互）、输出用 MathJax（排版质量）；两者差异在共享的公共 LaTeX 边界处理，而不是塞进渲染器配置。
 - **`\textstyle` 而非 inline display**：绕开 MathJax 4 的 inline 断行行为，产物始终是单个 `<svg>`。
 
 ## 已知边界

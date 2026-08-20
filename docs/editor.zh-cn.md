@@ -65,6 +65,7 @@ MathLive 的 `getOffsetFromPoint` 在上下标/分组下不可靠（很多位置
 - 命令名从 MathLive 内部的 `latexgroup` 原子读取（`typedCommandName`）——补全进行中 `mf.value` 序列化为空串，取不到命令。
 - 命令 → 元素的映射在 `equation-elements.ts` 的 `getElementByCommand`：id 与命令名一致的元素优先（`\sqrt` → 平方根而非 n 次方根）；命令被多个元素共享且没有 id 匹配的（`\left`、`\begin`）不映射，交给原生补全。
 - 完成时先 `executeCommand(['complete', 'reject'])` 丢弃正在输入的命令、切回 math 模式，再复用 `insertElement` 插入——与拖拽完全一致（文本命令会得到空文本盒哨兵 + 边界 marker，其余得到占位符）。
+- 规范化后仍不被项目 MathJax 配置支持的候选项，在键盘确认和鼠标点选时都会被丢弃；完整清单及判定规则见[反斜杠补全兼容性禁用表](latex-autocomplete-compatibility.zh-cn.md)。
 - 两类命令特殊处理：
   - 样式切换 `\displaystyle`/`\textstyle`/`\scriptstyle`/`\scriptscriptstyle`：`completeStyleSwitch` 包裹光标后第一个元素（`firstElementRangeAfter` 算出其 caret 范围，脚本算在内），得到 `\displaystyle\sum`；后面没有内容时插入 `\displaystyle{□}` 占位符。
   - 根环境（`\displaylines` 等会 `isRoot` 替换模型根的）：直接丢弃补全，避免把输入框变成无法清空的坏环境。

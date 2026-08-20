@@ -16,7 +16,7 @@ Purpose: turn LaTeX into SVG. Editing uses MathLive, but export/preview/palette 
 
 MathJax is bundled as a vendor asset under `public/mathjax/` (copied from node_modules by `copy-vendor-assets.mjs`). `ensureMathJax` lazily loads the `tex-svg.js` script, caches `loadPromise`, and clears it on failure to allow retry.
 
-Key config: `tex.macros = { differentialD: '\mathrm{d}' }` — MathLive serializes its ISO upright differential as `\differentialD`, which MathJax doesn't know; this maps it to the standard `\mathrm{d}`. `loader.paths.fonts = ''` makes dynamic glyph data load root-relative.
+`loader.paths.fonts = ''` makes dynamic glyph data load root-relative. MathLive-only commands are converted to mainstream notation at the workspace's public-LaTeX boundary; see `latex-source.en.md`.
 
 ### SVG rendering (`renderEquationSvg`)
 
@@ -40,7 +40,7 @@ Each palette element renders via MathLive's static `convertLatexToMarkup`, then 
 
 ## Design choices
 
-- **Renderer split**: MathLive for editing (interactive), MathJax for output (typography). The `\differentialD` macro bridges the two.
+- **Renderer split**: MathLive for editing (interactive), MathJax for output (typography); their differences are handled at the shared public-LaTeX boundary rather than in renderer configuration.
 - **`\textstyle` over inline display**: sidesteps MathJax 4's inline line-breaking, always producing a single `<svg>`.
 
 ## Known limits

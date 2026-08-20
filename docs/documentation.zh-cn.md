@@ -13,6 +13,7 @@
 | [LaTeX 渲染与实时预览](rendering.zh-cn.md) | MathJax 加载、SVG 渲染管线、MathPreview 防抖、MathChip 缩放 |
 | [多格式导出](export.zh-cn.md) | 浏览器与 Rust 两条导出路径、SVG 校验、原子写、并发守卫 |
 | [LaTeX 源码面板与剪贴板](latex-source.zh-cn.md) | 源码双缓冲、三种复制格式、`.tex` 导入导出 |
+| [反斜杠补全兼容性禁用表](latex-autocomplete-compatibility.zh-cn.md) | MathLive 补全审计规则、禁用行为与完整命令清单 |
 | [国际化（i18n）](i18n.zh-cn.md) | locale 自动发现、`t()` 回退链、MathLive 词条覆盖、添加语言 |
 | [主题系统](theme.zh-cn.md) | `data-theme` + CSS 变量、localStorage 持久化、早应用防闪屏 |
 | [桌面集成与输入法](desktop-ime.zh-cn.md) | Tauri 命令注册、macOS 输入源切换、JS 层 IME 阻断 |
