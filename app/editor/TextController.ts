@@ -6,15 +6,15 @@ import {
   emptyTextSentinelLatex,
   isEmptyTextLatex,
   isTextCommandLatex,
-  mergeAdjacentTextCommands,
-  removeOrphanedTextBoundaries,
-  stripTextBoundaries,
   TEXT_BOUNDARY_LATEX,
   textHintFont,
   textHintText,
 } from '~/utils/text-boundary'
-import { ensureMathMode, internalModel } from './MathLiveAdapter'
-import { isMatrix, matrixContextAtCaret } from './MatrixController'
+import { ensureMathMode } from './MathLiveAdapter'
+import { matrixContextAtCaret, selectMatrixCellPlaceholder } from './MatrixController'
+import { normalizePublicLatex, publicStringOffsetToModel } from './EditorLatex'
+
+export { normalizePublicLatex, publicStringOffsetToModel } from './EditorLatex'
 
 export interface TextGroup {
   start: number
@@ -333,10 +333,6 @@ export function snapCaretIntoEmptyText(mf: MathfieldElement): boolean {
   return false
 }
 
-export function normalizePublicLatex(latex: string): string {
-  return mergeAdjacentTextCommands(stripTextBoundaries(removeOrphanedTextBoundaries(latex)))
-}
-
 function normalizeTextModel(mf: MathfieldElement): void {
   const fixed = addTextBoundaries(normalizePublicLatex(mf.value))
   if (fixed !== mf.value) {
@@ -367,21 +363,6 @@ function placeCaretInTextGroup(
   if (!fallback) return
   const group = textGroupFromAtom(mf, fallback.offset)
   if (group) mf.position = Math.min(group.first + fallback.index + charIndex, mf.lastOffset)
-}
-
-export function publicStringOffsetToModel(mf: MathfieldElement, stringOffset: number): number {
-  let bestOffset = 0
-  let bestDistance = Infinity
-  for (let offset = 0; offset <= mf.lastOffset; offset++) {
-    const length = normalizePublicLatex(mf.getValue(0, offset)).length
-    if (length > stringOffset) continue
-    const distance = stringOffset - length
-    if (distance < bestDistance) {
-      bestDistance = distance
-      bestOffset = offset
-    }
-  }
-  return bestOffset
 }
 
 function insertMathChar(mf: MathfieldElement, event: KeyboardEvent): void {
@@ -527,8 +508,6 @@ export function handleTextDeletion(
     }
     if (stringIndex < 0) return 'handled'
     const matrixContext = matrixContextAtCaret(mf)
-    const matrices = internalModel(mf)?.atoms?.filter(isMatrix) ?? []
-    const matrixIndex = matrixContext ? matrices.indexOf(matrixContext.matrix) : -1
     const caretPublicLength = normalizePublicLatex(mf.value.slice(0, stringIndex)).length
     const withoutText = normalizePublicLatex(
       mf.value.slice(0, stringIndex) + mf.value.slice(stringIndex + wrapped.length),
@@ -536,17 +515,13 @@ export function handleTextDeletion(
     const restored = restoreEmptyGroupLatex(withoutText) ?? withoutText
     mf.setValue(addTextBoundaries(restored), { mode: 'math', silenceNotifications: true })
     ensureMathMode(mf)
-    const model = internalModel(mf)
-    const matrix = matrixIndex >= 0 ? model?.atoms?.filter(isMatrix)[matrixIndex] : null
-    const placeholder = matrixContext && matrix
-      ? matrix
-          .getCell(matrixContext.row, matrixContext.column)
-          ?.find((atom) => atom.type === 'placeholder')
-      : null
-    if (model && placeholder) {
-      const offset = model.offsetOf(placeholder)
-      mf.selection = { ranges: [[offset - 1, offset]] }
-    } else {
+    const placeholderSelected = matrixContext && selectMatrixCellPlaceholder(
+      mf,
+      matrixContext.matrix.index,
+      matrixContext.row,
+      matrixContext.column,
+    )
+    if (!placeholderSelected) {
       mf.position = publicStringOffsetToModel(mf, caretPublicLength)
     }
     return 'changed'

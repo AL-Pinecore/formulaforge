@@ -6,7 +6,8 @@ Purpose: the core editing surface. Palette elements are dragged into the `<math-
 
 - `app/components/EquationWorkspace.vue` — workspace (field init, event orchestration, insertion callbacks, state publishing)
 - `app/editor/EditorHistory.ts` — semantic public-LaTeX + caret-position history
-- `app/editor/MathLiveAdapter.ts` — centralized MathLive public/private model access
+- `app/editor/MathLiveAdapter.ts` — small MathLive public-API compatibility helpers
+- `app/editor/EditorLatex.ts` — public LaTeX normalization and string-position mapping
 - `app/editor/SelectionController.ts` — caret-offset and placeholder geometry
 - `app/editor/TextController.ts` — text atom queries, input/delete rebuilding, empty boxes, and font styles
 - `app/editor/DragController.ts` — drag/drop events, target state, mirror field, and preview lifecycle
@@ -76,7 +77,7 @@ MathLive's `getOffsetFromPoint` is unreliable with sub/superscripts and groups (
 Typing `\` + a command name directly in the `<math-field>` (e.g. `\mathrm`, `\frac`, `\alpha`) opens MathLive's completion popover. On `Enter` / `Tab`, instead of MathLive's bare `\command{□}` completion, the workspace inserts the matching palette element's full template (with `#0`/`#?` placeholders).
 
 - `handleKeydown` intercepts `Enter`/`Tab` while in `latex` mode, routing to `AutocompleteController.completeCommand`.
-- The command name is read from MathLive's internal `latexgroup` atom (`typedCommandName`) — during composition `mf.value` serializes to an empty string, so the command can't be read from it.
+- `AutocompleteController.trackKeydown` maintains a local command buffer after the backslash; completion does not depend on the temporarily empty serialized `mf.value` or inspect MathLive atoms.
 - Command → element mapping lives in `equation-elements.ts`'s `getElementByCommand`: elements whose id equals the command name win (`\sqrt` → square root, not the n-th root); commands shared by several elements with no id match (`\left`, `\begin`) stay unmapped and fall through to native completion.
 - On completion it first runs `executeCommand(['complete', 'reject'])` to discard the in-progress command and switch back to math mode, then reuses `insertElement` — identical to drag-and-drop (text commands get the empty text-box sentinel + boundary markers, everything else gets placeholders).
 - Candidates that remain unsupported by the project's MathJax configuration after normalization are discarded for both keyboard confirmation and popover clicks; see the [backslash autocomplete compatibility blocklist](latex-autocomplete-compatibility.en.md) for the rule and full list.
@@ -86,7 +87,7 @@ Typing `\` + a command name directly in the `<math-field>` (e.g. `\mathrm`, `\fr
 
 ### Native context menu and unwrap
 
-`ContextMenuController` extends MathLive's `menuItems`, so native editor commands, matrix row/column actions, and the project's **Unwrap** action share one context menu. It caches the matrix/unwrap targets at right pointer-down, walks from the smallest atom under the pointer toward its parents, then selects and highlights the innermost command whose source has grouped arguments.
+`ContextMenuController` extends MathLive's `menuItems`, so native editor commands, matrix row/column actions, and the project's **Unwrap** action share one context menu. It caches matrix/unwrap targets using only public `getElementInfo()`, `getOffsetFromPoint()`, `getValue()`, and LaTeX source matching.
 
 **Unwrap** removes that command layer, filters empty placeholders, and concatenates the contents of `{...}`, `[...]`, and grouped scripts in source order. For example, right-clicking the fraction in `\sqrt{\frac{a}{b}}` produces `\sqrt{ab}`. Environment boundaries, left/right delimiters, and placeholder commands themselves are excluded from generic unwrap.
 

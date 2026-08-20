@@ -16,63 +16,64 @@ async function insertElement(page: Page, label: string, category: string) {
   await page.getByRole('button', { name: `Insert ${label}`, exact: true }).click()
 }
 
+function arrayBody(latex: string, environment: string): string | null {
+  const startToken = `\\begin{${environment}}`
+  const endToken = `\\end{${environment}}`
+  const start = latex.indexOf(startToken)
+  const end = latex.indexOf(endToken, start + startToken.length)
+  return start >= 0 && end >= 0 ? latex.slice(start + startToken.length, end) : null
+}
+
 async function arrayShape(field: Locator, environment: string) {
-  return field.evaluate((element, name) => {
-    const atoms = (element as unknown as {
-      _mathfield?: { model?: { atoms: Array<{
-        type: string
-        environmentName?: string
-        rowCount?: number
-        colCount?: number
-      }> } }
-    })._mathfield?.model?.atoms
-    const array = atoms?.find((atom) => atom.type === 'array' && atom.environmentName === name)
-    return { rows: array?.rowCount, columns: array?.colCount }
-  }, environment)
+  const body = arrayBody(
+    await field.evaluate((element) => (element as unknown as { value: string }).value),
+    environment,
+  )
+  if (body == null) return { rows: undefined, columns: undefined }
+  const rows = body.split('\\\\')
+  return { rows: rows.length, columns: Math.max(...rows.map((row) => row.split('&').length)) }
 }
 
 async function arrayPlaceholderCount(field: Locator, environment: string) {
-  return field.evaluate((element, name) => {
-    type Atom = { type: string }
-    const array = (element as unknown as {
-      _mathfield?: { model?: { atoms: Array<{
-        type: string
-        environmentName?: string
-        rowCount: number
-        colCount: number
-        getCell(row: number, column: number): Atom[] | undefined
-      }> } }
-    })._mathfield?.model?.atoms.find(
-      (atom) => atom.type === 'array' && atom.environmentName === name,
-    )
-    let count = 0
-    for (let row = 0; row < (array?.rowCount ?? 0); row++) {
-      for (let column = 0; column < (array?.colCount ?? 0); column++) {
-        count += array?.getCell(row, column)?.filter((atom) => atom.type === 'placeholder').length ?? 0
-      }
-    }
-    return count
-  }, environment)
+  const body = arrayBody(
+    await field.evaluate((element) => (element as unknown as { value: string }).value),
+    environment,
+  )
+  return body?.match(/\\placeholder/g)?.length ?? 0
 }
 
-async function rightClickArrayCell(page: Page, field: Locator, branch: string) {
-  const point = await field.evaluate((element, expectedBranch) => {
+async function arrayCellPoint(field: Locator, environment: string, branch: string) {
+  const shape = await arrayShape(field, environment)
+  const [row, column] = branch.split(',').map(Number)
+  const target = row! * shape.columns! + column!
+  return field.evaluate((element, targetIndex) => {
     const mf = element as unknown as {
       lastOffset: number
       getElementInfo(offset: number): {
+        latex?: string
         bounds?: { left: number; top: number; width: number; height: number }
       } | undefined
-      _mathfield?: { model?: { at(offset: number): { type: string; parentBranch?: unknown } } }
     }
+    let placeholderIndex = 0
     for (let offset = 0; offset <= mf.lastOffset; offset++) {
-      const atom = mf._mathfield?.model?.at(offset)
-      const bounds = mf.getElementInfo(offset)?.bounds
-      if (atom?.type === 'placeholder' && bounds && String(atom.parentBranch) === expectedBranch) {
+      const info = mf.getElementInfo(offset)
+      if (!/^\\placeholder/.test(info?.latex ?? '')) continue
+      if (placeholderIndex++ === targetIndex && info?.bounds) {
+        const bounds = info.bounds
         return { x: bounds.left + bounds.width / 2, y: bounds.top + bounds.height / 2 }
       }
     }
     return null
-  }, branch)
+  }, target)
+}
+
+async function rightClickArrayCell(
+  page: Page,
+  field: Locator,
+  environment: string,
+  branch: string,
+) {
+  const point = await arrayCellPoint(field, environment, branch)
   expect(point).not.toBeNull()
   await page.mouse.click(point!.x, point!.y, { button: 'right' })
 }
@@ -151,29 +152,9 @@ test('completes a typed symbol command with Tab', async ({ page, goto }) => {
 
 async function placeCaretBeforeSum(page: import('@playwright/test').Page) {
   await page.locator('math-field').evaluate((el) => {
-    const mf = el as unknown as {
-      focus(): void
-      position: number
-      _mathfield?: {
-        model?: {
-          atoms: { type: string; command?: string; firstChild?: unknown }[]
-          offsetOf(atom: unknown): number
-        }
-      }
-    }
+    const mf = el as unknown as { focus(): void; position: number }
     mf.focus()
-    const model = mf._mathfield?.model
-    if (!model) {
-      return
-    }
-    for (const atom of model.atoms) {
-      if (atom.command === '\\sum') {
-        mf.position = atom.firstChild
-          ? model.offsetOf(atom.firstChild) - 1
-          : model.offsetOf(atom) - 1
-        return
-      }
-    }
+    mf.position = 1
   })
   await page.waitForTimeout(200)
 }
@@ -1249,28 +1230,7 @@ test('matrix menu keeps a right-clicked placeholder as its command target', asyn
   await insertElement(page, 'Plain matrix', 'Matrices')
   const textarea = page.locator('.latex-textarea')
   const field = page.locator('math-field.workspace-field')
-  const placeholderPoint = (branch: string) => field.evaluate((element, expectedBranch) => {
-    const mf = element as unknown as {
-      lastOffset: number
-      getElementInfo(offset: number): {
-        bounds?: { left: number; top: number; width: number; height: number }
-      } | undefined
-      _mathfield?: { model?: { at(offset: number): { type: string; parentBranch?: unknown } } }
-    }
-    const model = mf._mathfield?.model
-    if (!model) return null
-    for (let offset = 0; offset <= mf.lastOffset; offset++) {
-      const atom = model.at(offset)
-      const bounds = mf.getElementInfo(offset)?.bounds
-      if (atom.type === 'placeholder' && bounds && String(atom.parentBranch) === expectedBranch) {
-        return {
-          x: bounds.left + bounds.width / 2,
-          y: bounds.top + bounds.height / 2,
-        }
-      }
-    }
-    return null
-  }, branch)
+  const placeholderPoint = (branch: string) => arrayCellPoint(field, 'matrix', branch)
   const point = await placeholderPoint('0,0')
   expect(point).not.toBeNull()
   await page.mouse.click(point!.x, point!.y, { button: 'right' })
@@ -1285,30 +1245,26 @@ test('matrix menu keeps a right-clicked placeholder as its command target', asyn
   await expect.poll(() => field.evaluate((element) => {
     const mf = element as unknown as {
       position: number
-      _mathfield?: { model?: { at(offset: number): { parentBranch?: unknown } } }
+      selection?: { ranges?: [number, number][] }
+      lastOffset: number
+      getElementInfo(offset: number): { latex?: string } | undefined
     }
-    return String(mf._mathfield?.model?.at(mf.position).parentBranch)
+    const target = mf.selection?.ranges?.[0]?.[1] ?? mf.position
+    const placeholders = Array.from({ length: mf.lastOffset + 1 }, (_, offset) => offset)
+      .filter((offset) => /^\\placeholder/.test(mf.getElementInfo(offset)?.latex ?? ''))
+    const index = placeholders.indexOf(target)
+    return index < 0 ? null : `${Math.floor(index / 2)},${index % 2}`
   })).toBe('0,0')
   await page.mouse.up()
 
-  await expect.poll(() => field.evaluate((element) => {
-    const model = (element as unknown as {
-      _mathfield?: { model?: { atoms: Array<{ type: string; environmentName?: string; rowCount?: number }> } }
-    })._mathfield?.model
-    return model?.atoms.find((atom) => atom.type === 'array' && atom.environmentName === 'matrix')?.rowCount
-  })).toBe(3)
+  await expect.poll(() => arrayShape(field, 'matrix')).toEqual({ rows: 3, columns: 2 })
   await expect(textarea).not.toHaveValue(/\\displaylines/)
 
   const addedRow = await placeholderPoint('1,0')
   expect(addedRow).not.toBeNull()
   await page.mouse.click(addedRow!.x, addedRow!.y, { button: 'right' })
   await page.getByRole('menuitem', { name: /^Delete Row/ }).click()
-  await expect.poll(() => field.evaluate((element) => {
-    const atoms = (element as unknown as {
-      _mathfield?: { model?: { atoms: Array<{ type: string; environmentName?: string; rowCount?: number }> } }
-    })._mathfield?.model?.atoms
-    return atoms?.find((atom) => atom.type === 'array' && atom.environmentName === 'matrix')?.rowCount
-  })).toBe(2)
+  await expect.poll(() => arrayShape(field, 'matrix')).toEqual({ rows: 2, columns: 2 })
 
   const remainingRow = await placeholderPoint('0,0')
   expect(remainingRow).not.toBeNull()
@@ -1316,23 +1272,13 @@ test('matrix menu keeps a right-clicked placeholder as its command target', asyn
   const deleteRow = page.getByRole('menuitem', { name: /^Delete Row/ })
   await expect(deleteRow).not.toHaveAttribute('aria-disabled', 'true')
   await deleteRow.click()
-  await expect.poll(() => field.evaluate((element) => {
-    const atoms = (element as unknown as {
-      _mathfield?: { model?: { atoms: Array<{ type: string; environmentName?: string; rowCount?: number }> } }
-    })._mathfield?.model?.atoms
-    return atoms?.find((atom) => atom.type === 'array' && atom.environmentName === 'matrix')?.rowCount
-  })).toBe(1)
+  await expect.poll(() => arrayShape(field, 'matrix')).toEqual({ rows: 1, columns: 2 })
 
   const firstCell = await placeholderPoint('0,0')
   expect(firstCell).not.toBeNull()
   await page.mouse.click(firstCell!.x, firstCell!.y, { button: 'right' })
   await page.getByRole('menuitem', { name: /^Delete Column/ }).click()
-  await expect.poll(() => field.evaluate((element) => {
-    const atoms = (element as unknown as {
-      _mathfield?: { model?: { atoms: Array<{ type: string; environmentName?: string; colCount?: number }> } }
-    })._mathfield?.model?.atoms
-    return atoms?.find((atom) => atom.type === 'array' && atom.environmentName === 'matrix')?.colCount
-  })).toBe(1)
+  await expect.poll(() => arrayShape(field, 'matrix')).toEqual({ rows: 1, columns: 1 })
 })
 
 test('aligned equations can add and remove rows from the context menu', async ({ page, goto }) => {
@@ -1341,7 +1287,7 @@ test('aligned equations can add and remove rows from the context menu', async ({
   const field = page.locator('math-field.workspace-field')
   const textarea = page.locator('.latex-textarea')
 
-  await rightClickArrayCell(page, field, '0,0')
+  await rightClickArrayCell(page, field, 'aligned', '0,0')
   await page.getByRole('menuitem', { name: /^Insert Row Below/ }).click()
   await expect.poll(() => arrayShape(field, 'aligned')).toEqual({ rows: 3, columns: 2 })
   await expect.poll(async () => {
@@ -1350,7 +1296,7 @@ test('aligned equations can add and remove rows from the context menu', async ({
   }).toBe(3)
   await expect.poll(() => arrayPlaceholderCount(field, 'aligned')).toBe(6)
 
-  await rightClickArrayCell(page, field, '1,0')
+  await rightClickArrayCell(page, field, 'aligned', '1,0')
   await page.getByRole('menuitem', { name: /^Delete Row/ }).click()
   await expect.poll(() => arrayShape(field, 'aligned')).toEqual({ rows: 2, columns: 2 })
 })
@@ -1360,21 +1306,21 @@ test('cases can add and remove placeholder rows and columns', async ({ page, got
   await insertElement(page, 'Cases (piecewise)', 'Brackets')
   const field = page.locator('math-field.workspace-field')
 
-  await rightClickArrayCell(page, field, '0,0')
+  await rightClickArrayCell(page, field, 'cases', '0,0')
   await page.getByRole('menuitem', { name: /^Insert Row Below/ }).click()
   await expect.poll(() => arrayShape(field, 'cases')).toEqual({ rows: 3, columns: 2 })
   await expect.poll(() => arrayPlaceholderCount(field, 'cases')).toBe(6)
 
-  await rightClickArrayCell(page, field, '0,0')
+  await rightClickArrayCell(page, field, 'cases', '0,0')
   await page.getByRole('menuitem', { name: /^Insert Column Right/ }).click()
   await expect.poll(() => arrayShape(field, 'cases')).toEqual({ rows: 3, columns: 3 })
   await expect.poll(() => arrayPlaceholderCount(field, 'cases')).toBe(9)
 
-  await rightClickArrayCell(page, field, '1,0')
+  await rightClickArrayCell(page, field, 'cases', '1,0')
   await page.getByRole('menuitem', { name: /^Delete Row/ }).click()
   await expect.poll(() => arrayShape(field, 'cases')).toEqual({ rows: 2, columns: 3 })
 
-  await rightClickArrayCell(page, field, '0,1')
+  await rightClickArrayCell(page, field, 'cases', '0,1')
   await page.getByRole('menuitem', { name: /^Delete Column/ }).click()
   await expect.poll(() => arrayShape(field, 'cases')).toEqual({ rows: 2, columns: 2 })
 })

@@ -1,47 +1,48 @@
 # Matrix Editing
 
-Purpose: structural editing of array environments (matrix / cases / aligned) — add/remove rows and columns via a context menu and via the Enter/Delete keys.
+Purpose: structural editing of array environments (matrix / cases / aligned) through context-menu and Enter/Delete row/column actions.
 
 ## Files
 
 - `app/utils/matrix.ts` — Enter/Delete decision logic
-- `app/editor/MathLiveAdapter.ts` — private MathLive model types and sole access point
-- `app/editor/MatrixController.ts` — matrix context lookup and geometry hit-testing
+- `app/editor/MatrixController.ts` — public-LaTeX parsing, context lookup, and geometry hit-testing
+- `app/editor/EditorLatex.ts` — public LaTeX string positions to MathLive offsets
 - `app/editor/ContextMenuController.ts` — context targets, menu configuration, and command execution
 
 ## How it works
 
-### Internal model reading
+### Public LaTeX structure
 
-MathLive's public API doesn't expose matrix structure, so `MathLiveAdapter.internalModel` centralizes access to the private `mf._mathfield.model`. `MatrixController` uses the `InternalAtom`/`InternalMatrix` interfaces to access the array atom's `environmentName`, `rowCount`/`colCount`, `getCell(row, col)`, and the atom's parent/child relationship (`parent`/`parentBranch`).
+MathLive's public API does not return matrix rows and columns directly. `MatrixController` parses public `mf.value` instead: it recognizes matrix, cases (including `dcases`/`rcases`), and `aligned`, and splits `&` and `\\` only outside braces and nested environments. The result contains rows, columns, cell source ranges, and empty row/column state.
 
-`MatrixController.isMatrix` checks that the atom is an array whose `environmentName` is a matrix, cases (including `dcases`/`rcases`), or `aligned` environment. They reuse the same row/column targeting and commands; cases cells use the generic placeholder restoration, while aligned equations keep their fixed alignment-column structure.
+These environments reuse the same targeting and commands; cases cells use generic placeholder restoration, while aligned equations keep their fixed alignment-column structure.
 
 ### Caret context `matrixContextAtCaret`
 
-Starting from the caret position, walk up `atom.parent` to find the enclosing matrix, its row/column, and whether the whole row/column is empty (`isEmptyMatrixCell`: the cell contains only `first` or `placeholder` atoms).
+The controller temporarily inserts a unique text marker at the caret through public `insert()`, reads the marked `mf.value` to identify the matrix and cell, then restores the original formula and selection. A cell is empty when removing `\placeholder{}` leaves no content.
 
 ### Key decision `matrixCommandsForKey`
 
-A pure function in `matrix.ts`: given row/column, whether it's on the last row/column, and whether the row/column is empty, return the commands to run:
+The pure `matrixCommandsForKey` function receives the row/column location and empty state:
 
-- **Enter**: single row → add a column at the end; single column → add a row at the end; otherwise add at the last row/column.
-- **Delete**: only remove a column when the caret is in the last, empty column; only remove a row when in the last, empty row.
+- **Enter**: a single row adds a column; a single column adds a row; otherwise the last row/column grows independently.
+- **Delete**: removes only a last column or row that is empty.
 
-`handleMatrixResizeKey` intercepts Enter/Backspace/Delete (no modifiers, collapsed caret or single-placeholder selection), feeds the context into `matrixCommandsForKey`, and runs `executeMatrixCommands` when there are commands.
+`handleMatrixResizeKey` intercepts Enter/Backspace/Delete for a collapsed caret or one selected placeholder and delegates the returned commands to `executeMatrixCommands`.
 
-A newly inserted `aligned` row is completed as `\placeholder{} &= \placeholder{}`, preserving its equals sign and editable slots on both sides.
+A new `aligned` row is completed as `\placeholder{} &= \placeholder{}` to preserve the equals sign and both editable slots.
 
 ### Context menu
 
-Matrices and cases use MathLive's native row/column menu items, while `aligned` reuses the row insertion/deletion items; all share one menu with the editor's native commands and **Unwrap**. `ContextMenuController` targets the nearest atom using each cell's actual bounds and keeps an empty placeholder selected. Menu-item `pointerdown` no longer bubbles back into the mathfield, and row/column commands restore the saved cell atom before execution so MathLive's delayed command cannot target another cell or the root `lines` environment.
+Matrices and cases use MathLive's native row/column items, while `aligned` reuses row insertion/deletion. `ContextMenuController` finds the nearest public offset through `getElementInfo(offset).bounds`, keeps an empty placeholder selected, and restores the saved public offset before running a delayed menu command.
 
 ## Design choices
 
-- **Reading private `_mathfield.model`**: the public API is missing; this is the only way to get matrix structure, at the cost of coupling to MathLive internals (see limits).
-- **Decision logic extracted as a pure function `matrixCommandsForKey`**: keyboard resizing is independently unit-testable; context-menu actions reuse MathLive's native commands instead of maintaining a second menu.
+- **Parse public LaTeX**: avoids coupling to MathLive atom layouts; the parser covers only the array environments and top-level delimiters the editor supports.
+- **Pure decision function**: keyboard resizing is unit-testable; context actions reuse MathLive's native commands.
 
 ## Known limits
 
-- `internalModel` depends on the private `_mathfield.model` field and may break on MathLive upgrades; the related types and access live in `MathLiveAdapter.ts`.
+- The temporary caret marker performs one public `insert()` / `setValue()` round trip; context lookup is linear for very large matrices.
+- Supporting custom array syntax requires extending `MatrixController`'s environment allowlist and delimiter rules.
 - `MAX_MATRIX_COLUMNS = 100` caps the column count.

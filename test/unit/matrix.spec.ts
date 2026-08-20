@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { matrixContextFromLatex } from '~/editor/MatrixController'
 import { matrixCommandsForKey, type MatrixCellState } from '~/utils/matrix'
 
 const state = (overrides: Partial<MatrixCellState>): MatrixCellState => ({
@@ -54,5 +55,27 @@ describe('matrix keyboard resizing', () => {
     const single = state({ rows: 1, columns: 1, rowEmpty: true, columnEmpty: true })
     expect(matrixCommandsForKey(single, 'Enter')).toEqual(['addColumnAfter'])
     expect(matrixCommandsForKey(single, 'Delete')).toEqual([])
+  })
+})
+
+describe('public LaTeX matrix context', () => {
+  it('finds cells without splitting nested matrices or braced ampersands', () => {
+    const latex = String.raw`\begin{matrix}{a&b}&\placeholder{}\\c&\begin{matrix}1&2\\3&4\end{matrix}\end{matrix}`
+    const empty = matrixContextFromLatex(latex, latex.indexOf('placeholder'))
+    expect(empty && [empty.row, empty.column, empty.rowEmpty, empty.columnEmpty]).toEqual([
+      0,
+      1,
+      false,
+      false,
+    ])
+
+    const nested = matrixContextFromLatex(latex, latex.indexOf('3'))
+    expect(nested && [nested.matrix.environmentName, nested.row, nested.column]).toEqual([
+      'matrix',
+      1,
+      0,
+    ])
+    expect(nested?.matrix.rowCount).toBe(2)
+    expect(nested?.matrix.colCount).toBe(2)
   })
 })

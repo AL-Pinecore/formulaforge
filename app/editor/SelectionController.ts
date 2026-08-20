@@ -64,6 +64,18 @@ export function isSinglePlaceholderSelection(mf: MathfieldElement): boolean {
   return info?.latex != null && PLACEHOLDER_LATEX_RE.test(info.latex)
 }
 
+export function firstElementRangeAfter(mf: MathfieldElement): [number, number] | null {
+  const position = mf.position
+  for (let end = position + 1; end <= mf.lastOffset; end++) {
+    const latex = mf.getElementInfo(end)?.latex
+    if (!latex || PLACEHOLDER_LATEX_RE.test(latex)) continue
+    for (let start = position; start < end; start++) {
+      if (mf.getValue(start, end) === latex) return [start, end]
+    }
+  }
+  return null
+}
+
 export function placeholderIndexAtPoint(mf: MathfieldElement, x: number, y: number): number {
   const root = mf.shadowRoot
   if (!root) return -1

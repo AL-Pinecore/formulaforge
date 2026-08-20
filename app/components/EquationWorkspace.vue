@@ -664,8 +664,6 @@ const CARET_MARKER = '\\bigstar'
 // Native recording stays disabled; the semantic history never sees this round-trip.
 function unwrapElementAtCaret(mf: MathfieldElement): { latex: string; caretOffset: number } | null {
   const original = mf.value
-  const controls = mf as unknown as { stopRecording?: () => void }
-  controls.stopRecording?.()
   let marked = ''
   try {
     mf.insert(CARET_MARKER, {
@@ -679,7 +677,7 @@ function unwrapElementAtCaret(mf: MathfieldElement): { latex: string; caretOffse
     marked = ''
   } finally {
     mf.setValue(original, { mode: 'math', silenceNotifications: true })
-    controls.stopRecording?.()
+    mf.resetUndo()
   }
   const markerIndex = marked.indexOf(CARET_MARKER)
   if (markerIndex < 0 || marked.indexOf(CARET_MARKER, markerIndex + 1) >= 0) {
@@ -710,8 +708,6 @@ function rootIndexAtomBeforeCaret(mf: MathfieldElement): boolean {
   }
   const position = mf.position
   const original = mf.value
-  const controls = mf as unknown as { stopRecording?: () => void }
-  controls.stopRecording?.()
   let marked = ''
   try {
     mf.insert(CARET_MARKER, {
@@ -725,7 +721,7 @@ function rootIndexAtomBeforeCaret(mf: MathfieldElement): boolean {
     marked = ''
   } finally {
     mf.setValue(original, { mode: 'math', silenceNotifications: true })
-    controls.stopRecording?.()
+    mf.resetUndo()
   }
   mf.position = position
   const markerPos = marked.indexOf(CARET_MARKER)
@@ -852,6 +848,8 @@ function onMfKeydown(event: KeyboardEvent) {
     }
     return
   }
+  const mf = getMf()
+  if (mf) autocompleteController.trackKeydown(mf, event)
   const isArrowKey = event.key === 'ArrowLeft' || event.key === 'ArrowRight'
   const isModifierKey =
     event.key === 'Shift' ||

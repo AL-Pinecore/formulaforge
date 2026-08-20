@@ -2,12 +2,11 @@ import type { MathfieldElement } from 'mathlive'
 import type { MatrixCommand } from '~/utils/matrix'
 import { unwrapCommandLatex } from '~/utils/unwrap-element'
 import {
-  matrixAtPoint,
   matrixContextAtCaret,
   matrixOffsetAtPoint,
+  moveToMatrixCell,
 } from './MatrixController'
-import { internalModel, type InternalAtom } from './MathLiveAdapter'
-import { normalizePublicLatex, publicStringOffsetToModel } from './TextController'
+import { normalizePublicLatex, publicStringOffsetToModel } from './EditorLatex'
 
 type ContextMatrixCommand = MatrixCommand | 'addColumnBefore' | 'addRowBefore'
 
@@ -36,7 +35,7 @@ type ContextMenuOptions = {
 
 export class ContextMenuController {
   private unwrapTarget: UnwrapTarget | null = null
-  private matrixTarget: InternalAtom | null = null
+  private matrixTarget: { offset: number; placeholder: boolean } | null = null
 
   constructor(private readonly options: ContextMenuOptions) {}
 
@@ -80,19 +79,14 @@ export class ContextMenuController {
   }
 
   onContextMenu(mf: MathfieldElement, event: MouseEvent, matrixPadding: number): void {
-    const model = internalModel(mf)
-    if (!model) return
-
     const unwrap = this.unwrapTarget ?? this.unwrapTargetAtPoint(mf, event.clientX, event.clientY)
-    const matrix = matrixAtPoint(mf, event.clientX, event.clientY, matrixPadding)
-    const offset = matrix
-      ? matrixOffsetAtPoint(mf, matrix, event.clientX, event.clientY)
-      : mf.getOffsetFromPoint(event.clientX, event.clientY)
+    const offset = matrixOffsetAtPoint(mf, event.clientX, event.clientY, matrixPadding)
+      ?? mf.getOffsetFromPoint(event.clientX, event.clientY)
     if (offset == null || offset < 0) return
-    const atom = model.at(offset)
-    if (atom?.type === 'placeholder') mf.selection = { ranges: [[offset - 1, offset]] }
+    const placeholder = /^\\placeholder/.test(mf.getElementInfo(offset)?.latex ?? '')
+    if (placeholder) mf.selection = { ranges: [[Math.max(0, offset - 1), offset]] }
     else mf.position = offset
-    this.matrixTarget = matrixContextAtCaret(mf) ? atom : null
+    this.matrixTarget = matrixContextAtCaret(mf) ? { offset, placeholder } : null
 
     mf.focus()
     if (!unwrap) return
@@ -115,18 +109,15 @@ export class ContextMenuController {
       mf.executeCommand(command)
       if (command !== 'addRowBefore' && command !== 'addRowAfter') continue
       const context = matrixContextAtCaret(mf)
-      const model = internalModel(mf)
-      const right = context?.matrix.getCell(context.row, 1)?.[0]
-      if (context?.matrix.environmentName !== 'aligned' || !model || !right) continue
-      mf.position = model.offsetOf(right)
+      if (context?.matrix.environmentName !== 'aligned') continue
+      if (!moveToMatrixCell(mf, context.matrix.index, context.row, 1)) continue
       mf.insert('=\\placeholder{}', {
         mode: 'math',
         format: 'latex',
         selectionMode: 'after',
         silenceNotifications: true,
       })
-      const left = context.matrix.getCell(context.row, 0)?.[0]
-      if (left) mf.position = model.offsetOf(left)
+      moveToMatrixCell(mf, context.matrix.index, context.row, 0)
     }
     this.options.restoreEmptyGroups(mf)
     this.options.publishState(mf)
@@ -137,13 +128,10 @@ export class ContextMenuController {
     mf: MathfieldElement,
     command: ContextMatrixCommand,
   ): void {
-    const model = internalModel(mf)
     const target = this.matrixTarget
-    if (!model || !target) return
-    const offset = model.offsetOf(target)
-    if (offset < 0) return
-    if (target.type === 'placeholder') mf.selection = { ranges: [[offset - 1, offset]] }
-    else mf.position = offset
+    if (!target) return
+    if (target.placeholder) mf.selection = { ranges: [[Math.max(0, target.offset - 1), target.offset]] }
+    else mf.position = target.offset
     this.executeMatrixCommands(mf, [command])
   }
 
@@ -174,58 +162,43 @@ export class ContextMenuController {
     x: number,
     y: number,
   ): UnwrapTarget | null {
-    const model = internalModel(mf)
-    let offset = mf.getOffsetFromPoint(x, y)
-    let area = Infinity
-    for (let candidate = 0; candidate <= mf.lastOffset; candidate++) {
-      const bounds = mf.getElementInfo(candidate)?.bounds
+    let best: { area: number; target: UnwrapTarget } | null = null
+    for (let end = 0; end <= mf.lastOffset; end++) {
+      const info = mf.getElementInfo(end)
+      const bounds = info?.bounds
       if (
-        bounds &&
-        x >= bounds.left &&
-        x <= bounds.left + bounds.width &&
-        y >= bounds.top &&
-        y <= bounds.top + bounds.height &&
-        bounds.width * bounds.height < area
-      ) {
-        offset = candidate
-        area = bounds.width * bounds.height
-      }
+        !bounds ||
+        x < bounds.left ||
+        x > bounds.left + bounds.width ||
+        y < bounds.top ||
+        y > bounds.top + bounds.height
+      ) continue
+      const target = this.unwrapTargetAtOffset(mf, end)
+      const area = bounds.width * bounds.height
+      if (target && (!best || area < best.area)) best = { area, target }
     }
-    let atom = model?.at(offset)
-    const seen = new Set<number>()
-    while (model && atom) {
-      const end = model.offsetOf(atom)
-      if (seen.has(end)) {
-        atom = atom.parent
-        continue
-      }
-      seen.add(end)
-      const latex = mf.getElementInfo(end)?.latex
-      if (!latex) {
-        atom = atom.parent
-        continue
-      }
-      const replacement = unwrapCommandLatex(latex)
-      const range = replacement != null && this.elementRange(mf, end, latex)
-      if (range) {
-        let occurrence = 0
-        for (let candidate = 0; candidate < end; candidate++) {
-          if (mf.getElementInfo(candidate)?.latex === latex) occurrence++
-        }
-        let index = -1
-        for (let candidate = 0; candidate <= occurrence; candidate++) {
-          index = mf.value.indexOf(latex, index + 1)
-        }
-        if (index >= 0) {
-          return {
-            range,
-            latex: mf.value.slice(0, index) + replacement + mf.value.slice(index + latex.length),
-            caretOffset: index + replacement.length,
-          }
-        }
-      }
-      atom = atom.parent
+    return best?.target ?? this.unwrapTargetAtOffset(mf, mf.getOffsetFromPoint(x, y))
+  }
+
+  private unwrapTargetAtOffset(mf: MathfieldElement, end: number): UnwrapTarget | null {
+    const latex = mf.getElementInfo(end)?.latex
+    if (!latex) return null
+    const replacement = unwrapCommandLatex(latex)
+    const range = replacement != null && this.elementRange(mf, end, latex)
+    if (!range) return null
+    let occurrence = 0
+    for (let candidate = 0; candidate < end; candidate++) {
+      if (mf.getElementInfo(candidate)?.latex === latex) occurrence++
     }
-    return null
+    let index = -1
+    for (let candidate = 0; candidate <= occurrence; candidate++) {
+      index = mf.value.indexOf(latex, index + 1)
+    }
+    if (index < 0) return null
+    return {
+      range,
+      latex: mf.value.slice(0, index) + replacement + mf.value.slice(index + latex.length),
+      caretOffset: index + replacement.length,
+    }
   }
 }
