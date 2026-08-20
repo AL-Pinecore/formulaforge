@@ -23,6 +23,7 @@ import {
   stripTextBoundaries,
   TEXT_BOUNDARY_LATEX,
   textHintFont,
+  textHintText,
   withEmptyTextSentinel,
 } from '~/utils/text-boundary'
 import type { EquationElement } from '~/types/equation'
@@ -98,16 +99,17 @@ const matrixMenuItems = computed(() => {
 })
 const insertionPreview = ref<string | null>(null)
 const previewBox = ref<{ left: number; top: number; width: number; height: number } | null>(null)
-const textHints = ref<
-  {
-    left: number
-    top: number
-    width: number
-    height: number
-    command: string
-    font: { fontFamily: string; fontWeight?: number; fontStyle?: string }
-  }[]
->([])
+interface TextHint {
+  left: number
+  top: number
+  width: number
+  height: number
+  text: string
+  font: { fontFamily: string; fontWeight?: number; fontStyle?: string }
+}
+const textHints = ref<TextHint[]>([])
+const previewTextHints = ref<TextHint[]>([])
+const visibleTextHints = computed(() => insertionPreview.value ? previewTextHints.value : textHints.value)
 const caretTextBox = ref<{ left: number; top: number; width: number; height: number } | null>(null)
 const emptyTextCaretBox = ref<{ left: number; top: number; width: number; height: number } | null>(null)
 let mathfield: MathfieldElement | null = null
@@ -606,20 +608,9 @@ function emptyTextHintBox(mf: MathfieldElement, group: TextGroup): VisualBox | n
 // The hint stays visible while the box is empty — even while the caret sits
 // inside it — and disappears as soon as real content is typed (the phantom
 // atoms are replaced, so the scan below no longer matches).
-function updateTextHints() {
-  const mf = getMf()
-  if (!mf) {
-    textHints.value = []
-    return
-  }
-  const hints: {
-    left: number
-    top: number
-    width: number
-    height: number
-    command: string
-    font: { fontFamily: string; fontWeight?: number; fontStyle?: string }
-  }[] = []
+function collectTextHints(mf: MathfieldElement): TextHint[] {
+  const hints: TextHint[] = []
+  if (typeof mf.getElementInfo !== 'function') return hints
   const seen = new Set<number>()
   for (let offset = 0; offset <= mf.lastOffset; offset++) {
     if (!isTextAtom(mf, offset)) {
@@ -632,10 +623,15 @@ function updateTextHints() {
     seen.add(group.first)
     const box = emptyTextHintBox(mf, group)
     if (box) {
-      hints.push({ ...box, command: group.command, font: textHintFont(group.command) })
+      hints.push({ ...box, text: textHintText(group.command), font: textHintFont(group.command) })
     }
   }
-  textHints.value = hints
+  return hints
+}
+
+function updateTextHints() {
+  const mf = getMf()
+  textHints.value = mf ? collectTextHints(mf) : []
 }
 
 let inkCanvasContext: CanvasRenderingContext2D | null = null
@@ -1198,10 +1194,7 @@ function renderPreview(element: EquationElement) {
   // An empty Text box previews as the gray word "Text" (the same word the hint
   // shows after the drop), so the preview has real width and pushes the
   // surrounding content aside.
-  const previewLatex =
-    withEmptyTextSentinel(element.latex) !== element.latex && element.display
-      ? element.display
-      : element.latex
+  const previewLatex = withEmptyTextSentinel(element.latex)
   mirror.insert(addTextBoundaries(previewLatex), {
     insertionMode: 'replaceSelection',
     selectionMode: 'item',
@@ -1209,7 +1202,7 @@ function renderPreview(element: EquationElement) {
     silenceNotifications: true,
   })
   const range = mirror.selection?.ranges?.[0]
-  if (range && range[0] !== range[1]) {
+  if (previewLatex === element.latex && range && range[0] !== range[1]) {
     mirror.applyStyle({ color: PREVIEW_GREY }, { range })
   }
   schedulePreviewSnapshot(mirror)
@@ -1241,6 +1234,7 @@ function snapshotPreview(mirror: MathfieldElement) {
   const latex = mirror.shadowRoot?.querySelector('.ML__latex') as HTMLElement | null
   if (!latex) {
     insertionPreview.value = null
+    previewTextHints.value = []
     previewBox.value = null
     return
   }
@@ -1253,6 +1247,7 @@ function snapshotPreview(mirror: MathfieldElement) {
   }
   const box = latex.getBoundingClientRect()
   previewBox.value = { left: box.left, top: box.top, width: box.width, height: box.height }
+  previewTextHints.value = collectTextHints(mirror)
   insertionPreview.value = `<span class="ML__container">${latex.outerHTML}</span>`
 }
 
@@ -1273,6 +1268,7 @@ function hidePreview() {
   dragX = -1
   dragY = -1
   insertionPreview.value = null
+  previewTextHints.value = []
   previewBox.value = null
 }
 
@@ -3103,7 +3099,7 @@ defineExpose({
         ></math-field>
       </div>
       <div
-        v-for="(hint, index) in textHints"
+        v-for="(hint, index) in visibleTextHints"
         :key="index"
         class="text-hint"
         :style="{
@@ -3117,7 +3113,7 @@ defineExpose({
           fontStyle: hint.font.fontStyle,
         }"
         aria-hidden="true"
-      >Text</div>
+      >{{ hint.text }}</div>
       <div
         v-if="insertionPreview"
         class="insertion-preview"

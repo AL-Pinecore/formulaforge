@@ -30,6 +30,8 @@ An empty text box holds no placeholder (a placeholder captures selection and sho
 
 `isEmptyTextLatex()` detects whether a serialized form is the sentinel; `stripEmptyTextSentinel()` restores empty boxes to `\text{}` in public LaTeX — the internal sentinel is never exposed.
 
+The visible gray hint is drawn by the workspace overlay. Both the drag preview and the placed empty box derive its position, dimensions, and font from the same phantom sentinel in their respective math fields, so the baseline and height do not jump between states. `\mathcal` / `\mathbb` hints use complete Unicode mathematical alphabets to avoid styling only the first letter when a TeX font lacks lowercase glyphs.
+
 ### Serialization pipeline
 
 `normalizePublicLatex()` is the fixed internal → public pipeline:

@@ -86,6 +86,12 @@ export function textHintFont(command: string): HintFont {
   return HINT_FONTS[command] ?? { fontFamily: TEXT_FONT_FAMILY }
 }
 
+export function textHintText(command: string): string {
+  if (command === 'mathcal') return '𝒯ℯ𝓍𝓉'
+  if (command === 'mathbb') return '𝕋𝕖𝕩𝕥'
+  return 'Text'
+}
+
 function matchingBrace(source: string, open: number): number {
   let depth = 0
   for (let i = open; i < source.length; i++) {

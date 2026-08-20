@@ -1443,14 +1443,25 @@ test('the Text drag preview shows the gray word and pushes the content apart', a
     page.evaluate(
       () => (document.querySelector('math-field.workspace-mirror') as unknown as { value: string })?.value,
     )
-  await expect.poll(mirrorValue).toContain('\\text{Text}')
-  await expect.poll(mirrorValue).not.toContain('phantom')
+  await expect.poll(mirrorValue).toContain('\\phantom{Text}')
+  const previewHint = page.locator('.text-hint').first()
+  await expect(previewHint).toHaveText('Text')
+  const previewHintBox = await previewHint.boundingBox()
+  const previewFont = await previewHint.evaluate((node) => getComputedStyle(node).font)
 
   await page.evaluate(() => {
     document
       .querySelector('button[aria-label="Insert Text"]')!
       .dispatchEvent(new DragEvent('dragend', { bubbles: true, cancelable: true, dataTransfer: new DataTransfer() }))
   })
+
+  await expandCategory(page, 'Text')
+  await page.getByRole('button', { name: 'Insert Text', exact: true }).click()
+  const placedHint = page.locator('.text-hint').first()
+  await expect(placedHint).toHaveText('Text')
+  const placedHintBox = await placedHint.boundingBox()
+  expect(placedHintBox!.height).toBeCloseTo(previewHintBox!.height, 1)
+  expect(await placedHint.evaluate((node) => getComputedStyle(node).font)).toBe(previewFont)
 })
 
 test('select all delete and replace clear the field without escaping markers', async ({

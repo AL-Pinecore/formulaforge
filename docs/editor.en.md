@@ -53,6 +53,8 @@ The preview uses a second offscreen `math-field` (`ensureMirrorField`):
 
 The mirror shares MathLive's renderer, so the preview is pixel-identical.
 
+Empty Text elements also use the post-drop phantom sentinel in the mirror and reuse the same visible hint overlay, so preview and placed states share identical box dimensions and fonts.
+
 ### Offset computation `offsetFromPoint`
 
 MathLive's `getOffsetFromPoint` is unreliable with sub/superscripts and groups (returns 0 for many positions). The workspace implements its own: `buildOffsetEdges` walks each offset's `getElementInfo(offset).bounds` to build an `OffsetEdge[]`, then picks the offset nearest to the click, preferring greater depth.

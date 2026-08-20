@@ -53,6 +53,8 @@ MathLive 的原生历史会记录 `setValue()`，但 Text 边界 marker、空盒
 
 mirror 与真实字段共用同一份 MathLive 渲染器，所以预览「像素级一致」。
 
+空 Text 元素在 mirror 中也使用放置后的 phantom 哨兵，并复用同一个可见 hint 覆盖层；预览与落点因此共享完全相同的盒尺寸和字体。
+
 ### 偏移计算 `offsetFromPoint`
 
 MathLive 的 `getOffsetFromPoint` 在上下标/分组下不可靠（很多位置返回 0）。工作区自己实现：`buildOffsetEdges` 遍历每个 offset 的 `getElementInfo(offset).bounds`，用每个原子的左右边缘构建 `OffsetEdge[]`，再按「距点击点最近、深度最大」选择偏移。

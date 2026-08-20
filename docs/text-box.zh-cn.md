@@ -30,6 +30,8 @@ marker 可能被 MathLive 重排（复制左 marker、丢掉右 marker），所�
 
 `isEmptyTextLatex()` 判断序列化结果是否就是空盒哨兵；`stripEmptyTextSentinel()` 在导出公共 LaTeX 时把空盒还原成 `\text{}`，绝不暴露内部哨兵。
 
+可见的灰色提示词由工作区覆盖层绘制。拖拽预览和放置后的空盒都从各自 math-field 中的同一 phantom 哨兵计算位置、尺寸和字体，因此两种状态不会发生基线或高度跳变。`\mathcal` / `\mathbb` 的提示词使用完整的 Unicode 数学字母，避免 TeX 字体缺少小写字形时只有首字母带样式。
+
 ### 序列化管线
 
 `normalizePublicLatex()` 是「内部值 → 公共值」的固定管线：

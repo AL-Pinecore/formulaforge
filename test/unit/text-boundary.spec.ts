@@ -9,6 +9,7 @@ import {
   stripTextBoundaries,
   TEXT_BOUNDARY_LATEX,
   textHintFont,
+  textHintText,
   withEmptyTextSentinel,
 } from '~/utils/text-boundary'
 
@@ -178,5 +179,11 @@ describe('text boundaries', () => {
     expect(textHintFont('bm').fontWeight).toBe(700)
     expect(textHintFont('mathsf').fontFamily).toBe('KaTeX_SansSerif')
     expect(textHintFont('mathfrak').fontFamily).toBe('KaTeX_Fraktur')
+  })
+
+  it('uses complete Unicode alphabets when the TeX font lacks lowercase glyphs', () => {
+    expect(textHintText('text')).toBe('Text')
+    expect(textHintText('mathcal')).toBe('𝒯ℯ𝓍𝓉')
+    expect(textHintText('mathbb')).toBe('𝕋𝕖𝕩𝕥')
   })
 })
