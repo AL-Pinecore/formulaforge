@@ -1976,6 +1976,52 @@ test('clicking a filled accent re-enters it so it can be edited again', async ({
   await expect(textarea).toHaveValue(/\\hat\{xy\}/, { timeout: 10000 })
 })
 
+test('brace annotations stay selectable while editing the main argument', async ({ page, goto }) => {
+  await goto('/', { waitUntil: 'hydration' })
+  const textarea = page.locator('.latex-textarea')
+  const field = page.locator('math-field.workspace-field')
+
+  await textarea.fill('\\underbrace{xy}_{\\placeholder{}}')
+  await textarea.blur()
+  await page.waitForTimeout(150)
+  await field.locator('text=▢').filter({ visible: true }).first().click({ force: true })
+  await page.waitForTimeout(150)
+  await page.keyboard.type('z')
+  await expect(textarea).toHaveValue('\\underbrace{xy}_{z}', { timeout: 10000 })
+  const annotationBox = await field.locator('text=z').filter({ visible: true }).first().boundingBox()
+  expect(annotationBox).not.toBeNull()
+  await page.mouse.click(
+    annotationBox!.x + annotationBox!.width + 6,
+    annotationBox!.y + annotationBox!.height / 2,
+  )
+  await page.waitForTimeout(50)
+  await page.keyboard.type('q')
+  await expect(textarea).toHaveValue('\\underbrace{xy}_{zq}', { timeout: 10000 })
+
+  await textarea.fill('\\overbrace{xy}^{z}')
+  await textarea.blur()
+  await page.waitForTimeout(150)
+  await field.locator('text=z').filter({ visible: true }).first().click({ force: true })
+  await page.waitForTimeout(50)
+  await page.keyboard.type('q')
+  await expect(textarea).toHaveValue('\\overbrace{xy}^{zq}', { timeout: 10000 })
+
+  const deleteLastMainAtom = async (latex: string) => {
+    await textarea.fill(latex)
+    await textarea.blur()
+    await page.waitForTimeout(150)
+    await field.locator('text=y').filter({ visible: true }).first().click({ force: true })
+    await page.waitForTimeout(50)
+    await page.keyboard.press('Backspace')
+  }
+
+  await deleteLastMainAtom('\\underbrace{xy}_{\\placeholder{}}')
+  await expect(textarea).toHaveValue(/\\underbrace\{x\}_\{(?:\\placeholder\{\})?\}/)
+
+  await deleteLastMainAtom('\\overbrace{xy}^{\\placeholder{}}')
+  await expect(textarea).toHaveValue(/\\overbrace\{x\}\^\{(?:\\placeholder\{\})?\}/)
+})
+
 test('arrow keys navigate into and through an accent argument', async ({ page, goto }) => {
   await goto('/', { waitUntil: 'hydration' })
   await insertElement(page, 'Hat', 'Accents')

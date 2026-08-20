@@ -2499,20 +2499,19 @@ function handleKeydown(event: KeyboardEvent) {
     event.stopPropagation()
     const parts: string[] = []
     for (let offset = accentTarget.start; offset <= accentTarget.end; offset++) {
-      if (offset === target) {
-        continue
-      }
       parts.push(mf.getElementInfo(offset)?.latex ?? '')
     }
-    const content = parts.join('')
-    const replacement = content
-      ? `\\${accentTarget.command}{${content}}`
-      : `\\${accentTarget.command}{\\placeholder{}}`
+    const content = parts.filter((_, index) => accentTarget.start + index !== target).join('')
+    const argument = content || '\\placeholder{}'
+    const originalAccent = mf.getElementInfo(accentTarget.constructOffset)?.latex
+    const replacement =
+      originalAccent && (accentTarget.command === 'overbrace' || accentTarget.command === 'underbrace')
+        ? originalAccent.replace(`{${parts.join('')}}`, `{${argument}}`)
+        : `\\${accentTarget.command}{${argument}}`
     {
       // Replacing a nested branch selection can make MathLive move the rebuilt
       // accent into another placeholder of its parent. Replace it in the
       // complete formula instead, then restore the caret inside the accent.
-      const originalAccent = mf.getElementInfo(accentTarget.constructOffset)?.latex
       if (originalAccent) {
         const deletedIndex = target - accentTarget.start
         let occurrence = 0
@@ -2876,7 +2875,7 @@ function accentBoundsAt(
     merge(mf.getElementInfo(offset)?.bounds)
   }
   if (group.command === 'overbrace' || group.command === 'underbrace') {
-    // Include the script run so clicking the brace annotation also re-enters.
+    // Include the script run in the highlighted construct bounds.
     for (let offset = group.constructOffset - 1; offset > group.end; offset--) {
       merge(mf.getElementInfo(offset)?.bounds)
     }
@@ -2885,6 +2884,9 @@ function accentBoundsAt(
 }
 
 function accentAtPoint(mf: MathfieldElement, x: number, y: number): AccentGroup | null {
+  if (braceAnnotationOffsetAtPoint(mf, x, y) != null) {
+    return null
+  }
   for (let offset = 0; offset <= mf.lastOffset; offset++) {
     const group = accentGroupAtOffset(mf, offset)
     if (!group) {
@@ -2899,6 +2901,37 @@ function accentAtPoint(mf: MathfieldElement, x: number, y: number): AccentGroup 
       y <= bounds.bottom + 4
     ) {
       return group
+    }
+  }
+  return null
+}
+
+function braceAnnotationOffsetAtPoint(
+  mf: MathfieldElement,
+  x: number,
+  y: number,
+): number | null {
+  for (let constructOffset = 0; constructOffset <= mf.lastOffset; constructOffset++) {
+    const group = accentGroupAtOffset(mf, constructOffset)
+    if (!group || (group.command !== 'overbrace' && group.command !== 'underbrace')) {
+      continue
+    }
+    for (let offset = group.end + 1; offset < group.constructOffset; offset++) {
+      const info = mf.getElementInfo(offset)
+      if (PLACEHOLDER_LATEX_RE.test(info?.latex ?? '')) {
+        continue
+      }
+      const bounds = info?.bounds
+      if (
+        bounds &&
+        bounds.width >= 0.5 &&
+        x >= bounds.left - PLACEHOLDER_CLICK_PAD &&
+        x <= bounds.right + PLACEHOLDER_CLICK_PAD &&
+        y >= bounds.top - PLACEHOLDER_CLICK_PAD &&
+        y <= bounds.bottom + PLACEHOLDER_CLICK_PAD
+      ) {
+        return offset
+      }
     }
   }
   return null
@@ -3032,8 +3065,27 @@ function onMfPointerDown(event: PointerEvent) {
   // Clicking a filled accent (or the accent glyph over it): MathLive maps the
   // click to either side of the opaque construct, so take over the click and
   // park the caret inside the argument (at its end) instead.
+  const annotationOffset = braceAnnotationOffsetAtPoint(mf, event.clientX, event.clientY)
+  if (annotationOffset != null) {
+    event.preventDefault()
+    if (document.activeElement !== mf) {
+      mf.focus()
+      if (document.activeElement !== mf) {
+        const keyboardSink = mf.shadowRoot?.querySelector<HTMLElement>('.ML__keyboard-sink')
+        keyboardSink?.focus()
+      }
+    }
+    mf.position = annotationOffset
+    caretArrivedByNavigation = false
+    onSelectionChange()
+    return
+  }
   const accent = accentAtPoint(mf, event.clientX, event.clientY)
-  if (accent && !isAccentArgEmpty(mf, accent)) {
+  if (
+    accent &&
+    !isAccentArgEmpty(mf, accent) &&
+    !placeholderAtPoint(mf, event.clientX, event.clientY)
+  ) {
     event.preventDefault()
     if (document.activeElement !== mf) {
       mf.blur()
@@ -3105,7 +3157,11 @@ function onPointerUp(event: PointerEvent) {
   // MathLive's click handling settles (it may still move the caret to either
   // side of the opaque construct).
   const accent = accentAtPoint(mf, event.clientX, event.clientY)
-  if (accent && !isAccentArgEmpty(mf, accent)) {
+  if (
+    accent &&
+    !isAccentArgEmpty(mf, accent) &&
+    !placeholderAtPoint(mf, event.clientX, event.clientY)
+  ) {
     const x = event.clientX
     const y = event.clientY
     requestAnimationFrame(() => {
