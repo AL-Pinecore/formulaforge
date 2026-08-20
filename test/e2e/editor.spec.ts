@@ -1132,7 +1132,7 @@ test('dragging a font style twice toggles it off', async ({ page, goto }) => {
 test('undo covers direct font styling and matrix structure commands', async ({ page, goto }) => {
   await goto('/', { waitUntil: 'hydration' })
   const textarea = page.locator('.latex-textarea')
-  const field = page.locator('math-field')
+  const field = page.locator('math-field.workspace-field')
   const undo = page.getByRole('button', { name: 'Undo', exact: true })
   const redo = page.getByRole('button', { name: 'Redo', exact: true })
 
@@ -1175,12 +1175,108 @@ test('undo covers direct font styling and matrix structure commands', async ({ p
   })
   expect(cell).not.toBeNull()
   await page.mouse.click(cell!.x, cell!.y, { button: 'right' })
-  await page.getByRole('menuitem', { name: 'Insert row below', exact: true }).click()
+  await page.getByRole('menuitem', { name: /^Insert Row Below/ }).click()
   await expect(textarea).not.toHaveValue(matrix)
   await undo.click()
   await expect(textarea).toHaveValue(matrix)
   await redo.click()
   await expect(textarea).not.toHaveValue(matrix)
+})
+
+test('matrix menu keeps a right-clicked placeholder as its command target', async ({ page, goto }) => {
+  await goto('/', { waitUntil: 'hydration' })
+  await insertElement(page, 'Plain matrix', 'Matrices')
+  const textarea = page.locator('.latex-textarea')
+  const field = page.locator('math-field.workspace-field')
+  const point = await field.evaluate((element) => {
+    const mf = element as unknown as {
+      lastOffset: number
+      getElementInfo(offset: number): {
+        bounds?: { left: number; top: number; width: number; height: number }
+      } | undefined
+      _mathfield?: { model?: { at(offset: number): { type: string; parentBranch?: unknown } } }
+    }
+    const model = mf._mathfield?.model
+    if (!model) return null
+    for (let offset = 0; offset <= mf.lastOffset; offset++) {
+      const atom = model.at(offset)
+      const bounds = mf.getElementInfo(offset)?.bounds
+      if (atom.type === 'placeholder' && bounds && String(atom.parentBranch) === '0,0') {
+        return {
+          x: bounds.left + bounds.width / 2,
+          y: bounds.top + bounds.height / 2,
+        }
+      }
+    }
+    return null
+  })
+  expect(point).not.toBeNull()
+  await page.mouse.click(point!.x, point!.y, { button: 'right' })
+
+  const rowBelow = page.getByRole('menuitem', { name: /^Insert Row Below/ })
+  await expect(rowBelow).toBeVisible()
+  await expect(rowBelow).not.toHaveAttribute('aria-disabled', 'true')
+  const itemBox = await rowBelow.boundingBox()
+  expect(itemBox).not.toBeNull()
+  await page.mouse.move(itemBox!.x + itemBox!.width / 2, itemBox!.y + itemBox!.height / 2)
+  await page.mouse.down()
+  await expect.poll(() => field.evaluate((element) => {
+    const mf = element as unknown as {
+      position: number
+      _mathfield?: { model?: { at(offset: number): { parentBranch?: unknown } } }
+    }
+    return String(mf._mathfield?.model?.at(mf.position).parentBranch)
+  })).toBe('0,0')
+  await page.mouse.up()
+
+  await expect.poll(() => field.evaluate((element) => {
+    const model = (element as unknown as {
+      _mathfield?: { model?: { atoms: Array<{ type: string; environmentName?: string; rowCount?: number }> } }
+    })._mathfield?.model
+    return model?.atoms.find((atom) => atom.type === 'array' && atom.environmentName === 'matrix')?.rowCount
+  })).toBe(3)
+  await expect(textarea).not.toHaveValue(/\\displaylines/)
+})
+
+test('native context menu unwraps the innermost pointed element', async ({ page, goto }) => {
+  await goto('/', { waitUntil: 'hydration' })
+  const textarea = page.locator('.latex-textarea')
+  const field = page.locator('math-field.workspace-field')
+  await textarea.fill('\\sqrt{\\frac{a}{b}}')
+  await textarea.blur()
+  const point = await field.evaluate((element) => {
+    const mf = element as unknown as {
+      lastOffset: number
+      getElementInfo(offset: number): {
+        latex?: string
+        bounds?: { left: number; top: number; width: number; height: number }
+      } | undefined
+    }
+    for (let offset = 0; offset <= mf.lastOffset; offset++) {
+      const info = mf.getElementInfo(offset)
+      if (info?.latex === 'a' && info.bounds) {
+        return {
+          x: info.bounds.left + info.bounds.width / 2,
+          y: info.bounds.top + info.bounds.height / 2,
+        }
+      }
+    }
+    return null
+  })
+  expect(point).not.toBeNull()
+  await page.mouse.click(point!.x, point!.y, { button: 'right' })
+  const unwrap = page.getByRole('menuitem', { name: 'Unwrap', exact: true })
+  await expect(unwrap).toBeVisible()
+  await expect.poll(() => field.evaluate((element) => {
+    const mf = element as unknown as {
+      selection: { ranges: Array<[number, number]> }
+      getValue(start: number, end: number): string
+    }
+    const [start, end] = mf.selection.ranges[0] ?? [0, 0]
+    return mf.getValue(start, end)
+  })).toBe('\\frac{a}{b}')
+  await unwrap.click()
+  await expect(textarea).toHaveValue('\\sqrt{ab}')
 })
 
 test('fraction numerator and denominator painted gaps are symmetric', async ({ page, goto }) => {
@@ -1633,6 +1729,15 @@ test('typing replaces the selected placeholder after inserting an accent element
   await expect(textarea).toHaveValue(/\\bar/, { timeout: 10000 })
   await page.keyboard.type('x')
   await expect(textarea).toHaveValue(/\\bar\{x\}/, { timeout: 10000 })
+})
+
+test('delete removes an accent when only its placeholder remains', async ({ page, goto }) => {
+  await goto('/', { waitUntil: 'hydration' })
+  await insertElement(page, 'Hat', 'Accents')
+  const textarea = page.locator('.latex-textarea')
+  await expect(textarea).toHaveValue(/\\hat/, { timeout: 10000 })
+  await page.keyboard.press('Delete')
+  await expect(textarea).toHaveValue('', { timeout: 10000 })
 })
 
 test('clicking an accent placeholder focuses it and accepts input', async ({ page, goto }) => {

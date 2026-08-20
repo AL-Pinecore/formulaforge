@@ -6,7 +6,6 @@
 
 - `app/utils/matrix.ts` — Enter/Delete 键的增删决策
 - `app/components/EquationWorkspace.vue` — 矩阵模型读取、右键菜单、命令执行
-- `app/components/ContextMenu.vue` — 通用右键菜单组件
 
 ## 工作机制
 
@@ -31,12 +30,12 @@ MathLive 的公开 API 不暴露矩阵结构，工作区直接读私有模型 `m
 
 ### 右键菜单
 
-`onMfContextMenu`：先用 `getOffsetFromPoint` 定位，若不在矩阵内则用 `matrixAtPoint` 找最近矩阵、把光标挪到其末尾。菜单项由 `matrixMenuItems` computed 生成——非 cell 命中只有「加行/加列」，cell 命中额外有「前后插入行列 / 删行 / 删列」（删列受 `minColumns` 限制，删行受 `rows <= 1` 限制）。
+矩阵直接使用 MathLive 原生的行列菜单项，并与编辑器原生命令和「解包」共用同一个菜单。`onMfContextMenu` 按各 cell 的实际边界定位最近的原子，空 placeholder 会保持选中。菜单项的 `pointerdown` 不再冒泡回 math-field，避免 MathLive 延迟执行菜单命令前把目标改到其他 cell 或根 `lines` 环境。
 
 ## 设计取舍
 
 - **读私有 `_mathfield.model`**：公开 API 缺失，这是获得矩阵结构的唯一途径，代价是耦合 MathLive 内部实现（见边界）。
-- **决策抽成纯函数 `matrixCommandsForKey`**：可独立单测，键盘/菜单共用同一份逻辑。
+- **决策抽成纯函数 `matrixCommandsForKey`**：键盘调整可独立单测；右键操作复用 MathLive 原生命令，避免维护第二套菜单。
 
 ## 已知边界
 

@@ -60,6 +60,7 @@ export default {
   workspace: {
     placeholder: '在此输入 LaTeX 或拖入元素…',
     dropHint: '拖放以在光标处插入',
+    unwrap: '解包',
   },
   matrix: {
     addRow: '添加一行',

@@ -12,6 +12,7 @@ import { removeElementAtPlaceholder } from '~/utils/remove-empty-element'
 import { normalizePortableLatex } from '~/utils/latex-normalize'
 import { DISABLED_LATEX_AUTOCOMPLETE_COMMANDS } from '~/utils/latex-autocomplete'
 import { matrixCommandsForKey, type MatrixCommand } from '~/utils/matrix'
+import { unwrapCommandLatex } from '~/utils/unwrap-element'
 import {
   addTextBoundaries,
   emptyTextSentinelLatex,
@@ -56,47 +57,15 @@ type MatrixMenuCommand =
   | 'addColumnBefore'
   | 'addRowBefore'
 
-interface MatrixMenuTarget {
-  x: number
-  y: number
-  cell: boolean
-  rows: number
-  columns: number
-  minColumns: number
+interface UnwrapTarget {
+  range: [number, number]
+  latex: string
+  caretOffset: number
 }
 
 const containerEl = ref<HTMLDivElement | null>(null)
 const dragging = ref(false)
-const matrixMenu = ref<MatrixMenuTarget | null>(null)
-const matrixMenuItems = computed(() => {
-  const target = matrixMenu.value
-  if (!target) return []
-  if (!target.cell) {
-    return [
-      { id: 'addRowAfter', label: t('matrix.addRow') },
-      { id: 'addColumnAfter', label: t('matrix.addColumn') },
-    ]
-  }
-  return [
-    { id: 'addRowBefore', label: t('matrix.insertRowAbove') },
-    { id: 'addRowAfter', label: t('matrix.insertRowBelow') },
-    { id: 'addColumnBefore', label: t('matrix.insertColumnBefore'), dividerBefore: true },
-    { id: 'addColumnAfter', label: t('matrix.insertColumnAfter') },
-    {
-      id: 'removeRow',
-      label: t('matrix.deleteRow'),
-      danger: true,
-      disabled: target.rows <= 1,
-      dividerBefore: true,
-    },
-    {
-      id: 'removeColumn',
-      label: t('matrix.deleteColumn'),
-      danger: true,
-      disabled: target.columns <= target.minColumns,
-    },
-  ]
-})
+let contextUnwrapTarget: UnwrapTarget | null = null
 const insertionPreview = ref<string | null>(null)
 const previewBox = ref<{ left: number; top: number; width: number; height: number } | null>(null)
 interface TextHint {
@@ -1052,6 +1021,7 @@ function configureMathfield(mf: MathfieldElement) {
   ensureAccentPositioning(mf)
   observeFractionRendering(mf)
   attachImeBlocker(mf)
+  configureContextMenu(mf)
   publishState(mf)
 }
 
@@ -1853,15 +1823,6 @@ function matrixContextAtCaret(mf: MathfieldElement): MatrixContext | null {
   return null
 }
 
-function matrixAtCaret(mf: MathfieldElement): InternalMatrix | null {
-  let atom: InternalAtom | undefined = internalModel(mf)?.at(mf.position)
-  while (atom) {
-    if (isMatrix(atom)) return atom
-    atom = atom.parent
-  }
-  return null
-}
-
 function matrixAtPoint(mf: MathfieldElement, x: number, y: number): InternalMatrix | null {
   const model = internalModel(mf)
   if (!model) return null
@@ -1878,8 +1839,12 @@ function matrixAtPoint(mf: MathfieldElement, x: number, y: number): InternalMatr
           ? {
               left: Math.min(box.left, bounds.left),
               top: Math.min(box.top, bounds.top),
-              width: Math.max(box.left + box.width, bounds.right) - Math.min(box.left, bounds.left),
-              height: Math.max(box.top + box.height, bounds.bottom) - Math.min(box.top, bounds.top),
+              width:
+                Math.max(box.left + box.width, bounds.left + bounds.width) -
+                Math.min(box.left, bounds.left),
+              height:
+                Math.max(box.top + box.height, bounds.top + bounds.height) -
+                Math.min(box.top, bounds.top),
             }
           : {
               left: bounds.left,
@@ -1905,12 +1870,161 @@ function matrixAtPoint(mf: MathfieldElement, x: number, y: number): InternalMatr
     .sort((a, b) => a.distance - b.distance)[0]?.matrix ?? null
 }
 
+function matrixOffsetAtPoint(
+  mf: MathfieldElement,
+  matrix: InternalMatrix,
+  x: number,
+  y: number,
+): number | null {
+  const model = internalModel(mf)
+  if (!model) return null
+  let nearest: { distance: number; offset: number } | null = null
+  let hit: { area: number; offset: number } | null = null
+
+  for (let row = 0; row < matrix.rowCount; row++) {
+    for (let column = 0; column < matrix.colCount; column++) {
+      const cell = matrix.getCell(row, column)
+      if (!cell) continue
+      let box: VisualBox | null = null
+      for (const atom of cell) {
+        const offset = model.offsetOf(atom)
+        const bounds = mf.getElementInfo(offset)?.bounds
+        if (!bounds) continue
+        const area = bounds.width * bounds.height
+        if (
+          x >= bounds.left &&
+          x <= bounds.left + bounds.width &&
+          y >= bounds.top &&
+          y <= bounds.top + bounds.height &&
+          (!hit || area < hit.area)
+        ) {
+          hit = { area, offset }
+        }
+        box = box
+          ? {
+              left: Math.min(box.left, bounds.left),
+              top: Math.min(box.top, bounds.top),
+              width:
+                Math.max(box.left + box.width, bounds.left + bounds.width) -
+                Math.min(box.left, bounds.left),
+              height:
+                Math.max(box.top + box.height, bounds.top + bounds.height) -
+                Math.min(box.top, bounds.top),
+            }
+          : { left: bounds.left, top: bounds.top, width: bounds.width, height: bounds.height }
+      }
+      const target = cell.at(-1)
+      if (!box || !target) continue
+      const distance = Math.hypot(
+        Math.max(box.left - x, 0, x - box.left - box.width),
+        Math.max(box.top - y, 0, y - box.top - box.height),
+      )
+      if (!nearest || distance < nearest.distance) {
+        nearest = { distance, offset: model.offsetOf(target) }
+      }
+    }
+  }
+  return hit?.offset ?? nearest?.offset ?? null
+}
+
 function executeMatrixCommands(mf: MathfieldElement, commands: readonly MatrixMenuCommand[]) {
   mf.focus()
   for (const command of commands) mf.executeCommand(command)
   restoreEmptyGroups(mf)
   publishState(mf)
   scheduleUpdateTextHints()
+}
+
+function elementRange(mf: MathfieldElement, end: number, latex: string): [number, number] | null {
+  for (let start = end; start >= 0; start--) {
+    if (mf.getValue(start, end) === latex) return [start, end]
+  }
+  return null
+}
+
+function unwrapTargetAtPoint(
+  mf: MathfieldElement,
+  x: number,
+  y: number,
+): UnwrapTarget | null {
+  const model = internalModel(mf)
+  let offset = mf.getOffsetFromPoint(x, y)
+  let area = Infinity
+  for (let candidate = 0; candidate <= mf.lastOffset; candidate++) {
+    const bounds = mf.getElementInfo(candidate)?.bounds
+    if (
+      bounds &&
+      x >= bounds.left &&
+      x <= bounds.left + bounds.width &&
+      y >= bounds.top &&
+      y <= bounds.top + bounds.height &&
+      bounds.width * bounds.height < area
+    ) {
+      offset = candidate
+      area = bounds.width * bounds.height
+    }
+  }
+  let atom = model?.at(offset)
+  const seen = new Set<number>()
+  while (model && atom) {
+    const end = model.offsetOf(atom)
+    if (seen.has(end)) {
+      atom = atom.parent
+      continue
+    }
+    seen.add(end)
+    const latex = mf.getElementInfo(end)?.latex
+    if (!latex) {
+      atom = atom.parent
+      continue
+    }
+    const replacement = unwrapCommandLatex(latex)
+    const range = replacement != null && elementRange(mf, end, latex)
+    if (range) {
+      let occurrence = 0
+      for (let candidate = 0; candidate < end; candidate++) {
+        if (mf.getElementInfo(candidate)?.latex === latex) occurrence++
+      }
+      let index = -1
+      for (let candidate = 0; candidate <= occurrence; candidate++) {
+        index = mf.value.indexOf(latex, index + 1)
+      }
+      if (index >= 0) {
+        return {
+          range,
+          latex: mf.value.slice(0, index) + replacement + mf.value.slice(index + latex.length),
+          caretOffset: index + replacement.length,
+        }
+      }
+    }
+    atom = atom.parent
+  }
+  return null
+}
+
+function unwrapContextTarget() {
+  const mf = getMf()
+  const target = contextUnwrapTarget
+  if (!mf || !target) return
+  const publicCaretOffset = normalizePublicLatex(target.latex.slice(0, target.caretOffset)).length
+  mf.setValue(target.latex, { mode: 'math', silenceNotifications: true })
+  restoreEmptyGroups(mf)
+  mf.position = publicStringOffsetToModel(mf, publicCaretOffset)
+  publishState(mf)
+  scheduleUpdateTextHints()
+}
+
+function configureContextMenu(mf: MathfieldElement) {
+  mf.menuItems = [
+    ...(mf.menuItems ?? []),
+    { type: 'divider' },
+    {
+      id: 'unwrap-element',
+      label: () => t('workspace.unwrap'),
+      visible: () => contextUnwrapTarget !== null,
+      onMenuSelect: unwrapContextTarget,
+    },
+  ]
 }
 
 function handleMatrixResizeKey(event: KeyboardEvent, mf: MathfieldElement): boolean {
@@ -1950,39 +2064,28 @@ function onMfContextMenu(event: MouseEvent) {
   const model = mf && internalModel(mf)
   if (!mf || !model) return
 
-  const offset = mf.getOffsetFromPoint(event.clientX, event.clientY)
-  if (!Number.isInteger(offset) || offset < 0) return
-  mf.position = offset
+  const unwrap = contextUnwrapTarget ?? unwrapTargetAtPoint(mf, event.clientX, event.clientY)
 
-  let context = matrixContextAtCaret(mf)
-  const clickedCell = Boolean(context)
-  if (!context) {
-    const matrix = matrixAtCaret(mf) ?? matrixAtPoint(mf, event.clientX, event.clientY)
-    const cell = matrix?.getCell(matrix.rowCount - 1, matrix.colCount - 1)
-    const last = cell?.at(-1)
-    if (!matrix || !last) return
-    mf.position = model.offsetOf(last)
-    context = matrixContextAtCaret(mf)
-  }
-  if (!context) return
+  const matrix = matrixAtPoint(mf, event.clientX, event.clientY)
+  const offset = matrix
+    ? matrixOffsetAtPoint(mf, matrix, event.clientX, event.clientY)
+    : mf.getOffsetFromPoint(event.clientX, event.clientY)
+  if (offset == null || offset < 0) return
+  const atom = model.at(offset)
+  if (atom?.type === 'placeholder') mf.selection = { ranges: [[offset - 1, offset]] }
+  else mf.position = offset
 
-  event.preventDefault()
-  event.stopPropagation()
   mf.focus()
-  matrixMenu.value = {
-    x: event.clientX,
-    y: event.clientY,
-    cell: clickedCell,
-    rows: context.matrix.rowCount,
-    columns: context.matrix.colCount,
-    minColumns: context.matrix.minColumns,
+  if (unwrap) {
+    contextUnwrapTarget = unwrap
+    mf.selection = { ranges: [unwrap.range] }
+    onSelectionChange()
+    requestAnimationFrame(() => {
+      if (contextUnwrapTarget !== unwrap) return
+      mf.selection = { ranges: [unwrap.range] }
+      onSelectionChange()
+    })
   }
-}
-
-function onMatrixMenuSelect(id: string) {
-  const mf = getMf()
-  if (!mf) return
-  executeMatrixCommands(mf, [id as MatrixMenuCommand])
 }
 
 const NON_ASCII_RE = /[^\x00-\x7F]/
@@ -2332,11 +2435,15 @@ function handleKeydown(event: KeyboardEvent) {
   // User-facing deletion semantics: Backspace deletes the character before the
   // caret (atom at `position`), Delete the one after it (atom at `position + 1`).
   const target = event.key === 'Delete' ? mf.position + 1 : mf.position
+  const info = mf.getElementInfo(mf.position)
+  const isPlaceholder =
+    isSinglePlaceholderSelection(mf) ||
+    (info?.latex != null && /^\\placeholder(?:\[[^\]]*\])?\{\}$/.test(info.latex))
   // Deleting a character inside an accent argument: MathLive treats the accent
   // construct as opaque, so its native deletion removes the whole accent or
   // nothing. Rebuild the argument without the targeted atom, like a Text box.
   const accentTarget = accentGroupAtAtom(mf, target)
-  if (accentTarget) {
+  if (accentTarget && !isPlaceholder) {
     event.preventDefault()
     event.stopPropagation()
     const parts: string[] = []
@@ -2442,10 +2549,6 @@ function handleKeydown(event: KeyboardEvent) {
       return
     }
   }
-  const info = mf.getElementInfo(mf.position)
-  const isPlaceholder =
-    isSinglePlaceholderSelection(mf) ||
-    (info?.latex != null && /^\\placeholder(?:\[[^\]]*\])?\{\}$/.test(info.latex))
   if (!isPlaceholder) {
     if (event.key === 'Backspace') {
       // Backspace on the last remaining character of a `\sqrt[n]{...}` index
@@ -2762,6 +2865,21 @@ function accentArrowTarget(mf: MathfieldElement, key: 'ArrowLeft' | 'ArrowRight'
 function onMfPointerDown(event: PointerEvent) {
   const mf = getMf()
   if (!mf) {
+    return
+  }
+  // MathLive dispatches a menu command after a short blink animation. Do not
+  // let the menu item's earlier pointerdown retarget the formula selection.
+  if (
+    event.composedPath().some(
+      (node) => node instanceof HTMLElement && node.getAttribute('role') === 'menuitem',
+    )
+  ) {
+    event.stopPropagation()
+    return
+  }
+  contextUnwrapTarget = null
+  if (event.button === 2) {
+    contextUnwrapTarget = unwrapTargetAtPoint(mf, event.clientX, event.clientY)
     return
   }
   // Clicking an empty Text box: take over the click so the caret lands in
@@ -3133,14 +3251,6 @@ defineExpose({
           {{ t('workspace.dropHint') }}
         </div>
       </Transition>
-      <ContextMenu
-        :open="Boolean(matrixMenu)"
-        :x="matrixMenu?.x ?? 0"
-        :y="matrixMenu?.y ?? 0"
-        :items="matrixMenuItems"
-        @close="matrixMenu = null"
-        @select="onMatrixMenuSelect"
-      />
     </div>
   </template>
 

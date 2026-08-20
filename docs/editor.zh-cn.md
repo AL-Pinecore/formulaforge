@@ -8,6 +8,7 @@
 - `app/components/EquationPalette.vue` — 元素面板（分类、搜索、tooltip、拖拽起点）
 - `app/utils/drag-payload.ts` — 拖拽共享状态（`draggedElementId` + MIME 类型）
 - `app/data/equation-elements.ts` — 200+ 个公式元素的定义
+- `app/utils/unwrap-element.ts` — 右键解包的 LaTeX 分组解析
 - `app/composables/useEquation.ts` — 全局状态单例
 - `app/types/equation.ts` — 元素类型与分类定义
 
@@ -74,6 +75,12 @@ MathLive 的 `getOffsetFromPoint` 在上下标/分组下不可靠（很多位置
   - 样式切换 `\displaystyle`/`\textstyle`/`\scriptstyle`/`\scriptscriptstyle`：`completeStyleSwitch` 包裹光标后第一个元素（`firstElementRangeAfter` 算出其 caret 范围，脚本算在内），得到 `\displaystyle\sum`；后面没有内容时插入 `\displaystyle{□}` 占位符。
   - 根环境（`\displaylines` 等会 `isRoot` 替换模型根的）：直接丢弃补全，避免把输入框变成无法清空的坏环境。
 
+
+### 原生右键菜单与解包
+
+工作区直接扩展 MathLive 的 `menuItems`，因此编辑器原生命令、矩阵增删行列和项目的「解包」共用同一个右键菜单。右键按下时从指针命中的最小原子向父级查找，选中并高光最内层、源码含分组参数的命令。
+
+「解包」去掉这一层命令，把 `{...}`、`[...]` 及上下标分组中的内容按源码顺序拼接，并过滤空 placeholder。例如 `\\sqrt{\\frac{a}{b}}` 在分数上右键会得到 `\\sqrt{ab}`。环境边界、左右定界符和 placeholder 本身不参与通用解包。
 
 ## 设计取舍
 

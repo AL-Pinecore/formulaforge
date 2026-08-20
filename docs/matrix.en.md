@@ -6,7 +6,6 @@ Purpose: structural editing of array environments (matrix / cases / aligned) —
 
 - `app/utils/matrix.ts` — Enter/Delete decision logic
 - `app/components/EquationWorkspace.vue` — matrix model reading, context menu, command execution
-- `app/components/ContextMenu.vue` — generic context-menu component
 
 ## How it works
 
@@ -31,12 +30,12 @@ A pure function in `matrix.ts`: given row/column, whether it's on the last row/c
 
 ### Context menu
 
-`onMfContextMenu`: locate with `getOffsetFromPoint`; if not inside a matrix, use `matrixAtPoint` to find the nearest one and move the caret to its end. Menu items are produced by the `matrixMenuItems` computed — a non-cell hit yields only "add row / add column", a cell hit additionally yields "insert before/after row/column, delete row/column" (column deletion is limited by `minColumns`, row deletion by `rows <= 1`).
+Matrices use MathLive's native row/column menu items in the same menu as the editor's native commands and **Unwrap**. `onMfContextMenu` targets the nearest atom using each cell's actual bounds and keeps an empty placeholder selected. Menu-item `pointerdown` no longer bubbles back into the mathfield, preventing MathLive's delayed command from being retargeted to another cell or the root `lines` environment.
 
 ## Design choices
 
 - **Reading private `_mathfield.model`**: the public API is missing; this is the only way to get matrix structure, at the cost of coupling to MathLive internals (see limits).
-- **Decision logic extracted as a pure function `matrixCommandsForKey`**: independently unit-testable, shared by keyboard and menu.
+- **Decision logic extracted as a pure function `matrixCommandsForKey`**: keyboard resizing is independently unit-testable; context-menu actions reuse MathLive's native commands instead of maintaining a second menu.
 
 ## Known limits
 

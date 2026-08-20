@@ -8,6 +8,7 @@ Purpose: the core editing surface. Palette elements are dragged into the `<math-
 - `app/components/EquationPalette.vue` — element palette (categories, search, tooltip, drag origin)
 - `app/utils/drag-payload.ts` — shared drag state (`draggedElementId` + MIME type)
 - `app/data/equation-elements.ts` — definitions of 200+ elements
+- `app/utils/unwrap-element.ts` — LaTeX group parsing for context-menu unwrap
 - `app/composables/useEquation.ts` — global state singleton
 - `app/types/equation.ts` — element & category types
 
@@ -73,6 +74,12 @@ Typing `\` + a command name directly in the `<math-field>` (e.g. `\mathrm`, `\fr
 - Two command classes get special handling:
   - Style switches `\displaystyle`/`\textstyle`/`\scriptstyle`/`\scriptscriptstyle`: `completeStyleSwitch` wraps the first element after the caret (`firstElementRangeAfter` computes its caret range, scripts included), yielding `\displaystyle\sum`; with nothing following it inserts a `\displaystyle{□}` placeholder.
   - Root environments (like `\displaylines`, whose `isRoot` atom would replace the model root): the completion is discarded so the field can't be left in an un-clearable broken state.
+
+### Native context menu and unwrap
+
+The workspace extends MathLive's `menuItems`, so native editor commands, matrix row/column actions, and the project's **Unwrap** action share one context menu. On right pointer-down it walks from the smallest atom under the pointer toward its parents, then selects and highlights the innermost command whose source has grouped arguments.
+
+**Unwrap** removes that command layer, filters empty placeholders, and concatenates the contents of `{...}`, `[...]`, and grouped scripts in source order. For example, right-clicking the fraction in `\sqrt{\frac{a}{b}}` produces `\sqrt{ab}`. Environment boundaries, left/right delimiters, and placeholder commands themselves are excluded from generic unwrap.
 
 ## Design choices
 

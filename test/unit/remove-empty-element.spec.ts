@@ -21,6 +21,10 @@ describe('removeElementAtPlaceholder', () => {
     expect(remove('\\sqrt{\\placeholder{}}')).toEqual({ latex: '', caretOffset: 0 })
   })
 
+  it('removes an empty accent', () => {
+    expect(remove('\\hat{\\placeholder{}}')).toEqual({ latex: '', caretOffset: 0 })
+  })
+
   it('removes an empty n-th root with an index', () => {
     expect(remove('\\sqrt[3]{\\placeholder{}}')).toEqual({ latex: '', caretOffset: 0 })
   })
