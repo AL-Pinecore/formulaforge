@@ -57,6 +57,15 @@ type MatrixMenuCommand =
   | 'addColumnBefore'
   | 'addRowBefore'
 
+const MATRIX_MENU_COMMANDS: Record<string, MatrixMenuCommand> = {
+  'add-row-above': 'addRowBefore',
+  'add-row-below': 'addRowAfter',
+  'add-column-before': 'addColumnBefore',
+  'add-column-after': 'addColumnAfter',
+  'delete-row': 'removeRow',
+  'delete-column': 'removeColumn',
+}
+
 interface UnwrapTarget {
   range: [number, number]
   latex: string
@@ -66,6 +75,7 @@ interface UnwrapTarget {
 const containerEl = ref<HTMLDivElement | null>(null)
 const dragging = ref(false)
 let contextUnwrapTarget: UnwrapTarget | null = null
+let contextMatrixTarget: InternalAtom | null = null
 const insertionPreview = ref<string | null>(null)
 const previewBox = ref<{ left: number; top: number; width: number; height: number } | null>(null)
 interface TextHint {
@@ -1935,6 +1945,18 @@ function executeMatrixCommands(mf: MathfieldElement, commands: readonly MatrixMe
   scheduleUpdateTextHints()
 }
 
+function executeContextMatrixCommand(command: MatrixMenuCommand) {
+  const mf = getMf()
+  const model = mf && internalModel(mf)
+  const target = contextMatrixTarget
+  if (!mf || !model || !target) return
+  const offset = model.offsetOf(target)
+  if (offset < 0) return
+  if (target.type === 'placeholder') mf.selection = { ranges: [[offset - 1, offset]] }
+  else mf.position = offset
+  executeMatrixCommands(mf, [command])
+}
+
 function elementRange(mf: MathfieldElement, end: number, latex: string): [number, number] | null {
   for (let start = end; start >= 0; start--) {
     if (mf.getValue(start, end) === latex) return [start, end]
@@ -2016,7 +2038,10 @@ function unwrapContextTarget() {
 
 function configureContextMenu(mf: MathfieldElement) {
   mf.menuItems = [
-    ...(mf.menuItems ?? []),
+    ...(mf.menuItems ?? []).map((item) => {
+      const command = 'id' in item && item.id ? MATRIX_MENU_COMMANDS[item.id] : undefined
+      return command ? { ...item, onMenuSelect: () => executeContextMatrixCommand(command) } : item
+    }),
     { type: 'divider' },
     {
       id: 'unwrap-element',
@@ -2074,6 +2099,7 @@ function onMfContextMenu(event: MouseEvent) {
   const atom = model.at(offset)
   if (atom?.type === 'placeholder') mf.selection = { ranges: [[offset - 1, offset]] }
   else mf.position = offset
+  contextMatrixTarget = matrixContextAtCaret(mf) ? atom : null
 
   mf.focus()
   if (unwrap) {
@@ -2878,6 +2904,7 @@ function onMfPointerDown(event: PointerEvent) {
     return
   }
   contextUnwrapTarget = null
+  contextMatrixTarget = null
   if (event.button === 2) {
     contextUnwrapTarget = unwrapTargetAtPoint(mf, event.clientX, event.clientY)
     return

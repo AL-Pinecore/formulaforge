@@ -1188,7 +1188,7 @@ test('matrix menu keeps a right-clicked placeholder as its command target', asyn
   await insertElement(page, 'Plain matrix', 'Matrices')
   const textarea = page.locator('.latex-textarea')
   const field = page.locator('math-field.workspace-field')
-  const point = await field.evaluate((element) => {
+  const placeholderPoint = (branch: string) => field.evaluate((element, expectedBranch) => {
     const mf = element as unknown as {
       lastOffset: number
       getElementInfo(offset: number): {
@@ -1201,7 +1201,7 @@ test('matrix menu keeps a right-clicked placeholder as its command target', asyn
     for (let offset = 0; offset <= mf.lastOffset; offset++) {
       const atom = model.at(offset)
       const bounds = mf.getElementInfo(offset)?.bounds
-      if (atom.type === 'placeholder' && bounds && String(atom.parentBranch) === '0,0') {
+      if (atom.type === 'placeholder' && bounds && String(atom.parentBranch) === expectedBranch) {
         return {
           x: bounds.left + bounds.width / 2,
           y: bounds.top + bounds.height / 2,
@@ -1209,7 +1209,8 @@ test('matrix menu keeps a right-clicked placeholder as its command target', asyn
       }
     }
     return null
-  })
+  }, branch)
+  const point = await placeholderPoint('0,0')
   expect(point).not.toBeNull()
   await page.mouse.click(point!.x, point!.y, { button: 'right' })
 
@@ -1236,6 +1237,41 @@ test('matrix menu keeps a right-clicked placeholder as its command target', asyn
     return model?.atoms.find((atom) => atom.type === 'array' && atom.environmentName === 'matrix')?.rowCount
   })).toBe(3)
   await expect(textarea).not.toHaveValue(/\\displaylines/)
+
+  const addedRow = await placeholderPoint('1,0')
+  expect(addedRow).not.toBeNull()
+  await page.mouse.click(addedRow!.x, addedRow!.y, { button: 'right' })
+  await page.getByRole('menuitem', { name: /^Delete Row/ }).click()
+  await expect.poll(() => field.evaluate((element) => {
+    const atoms = (element as unknown as {
+      _mathfield?: { model?: { atoms: Array<{ type: string; environmentName?: string; rowCount?: number }> } }
+    })._mathfield?.model?.atoms
+    return atoms?.find((atom) => atom.type === 'array' && atom.environmentName === 'matrix')?.rowCount
+  })).toBe(2)
+
+  const remainingRow = await placeholderPoint('0,0')
+  expect(remainingRow).not.toBeNull()
+  await page.mouse.click(remainingRow!.x, remainingRow!.y, { button: 'right' })
+  const deleteRow = page.getByRole('menuitem', { name: /^Delete Row/ })
+  await expect(deleteRow).not.toHaveAttribute('aria-disabled', 'true')
+  await deleteRow.click()
+  await expect.poll(() => field.evaluate((element) => {
+    const atoms = (element as unknown as {
+      _mathfield?: { model?: { atoms: Array<{ type: string; environmentName?: string; rowCount?: number }> } }
+    })._mathfield?.model?.atoms
+    return atoms?.find((atom) => atom.type === 'array' && atom.environmentName === 'matrix')?.rowCount
+  })).toBe(1)
+
+  const firstCell = await placeholderPoint('0,0')
+  expect(firstCell).not.toBeNull()
+  await page.mouse.click(firstCell!.x, firstCell!.y, { button: 'right' })
+  await page.getByRole('menuitem', { name: /^Delete Column/ }).click()
+  await expect.poll(() => field.evaluate((element) => {
+    const atoms = (element as unknown as {
+      _mathfield?: { model?: { atoms: Array<{ type: string; environmentName?: string; colCount?: number }> } }
+    })._mathfield?.model?.atoms
+    return atoms?.find((atom) => atom.type === 'array' && atom.environmentName === 'matrix')?.colCount
+  })).toBe(1)
 })
 
 test('native context menu unwraps the innermost pointed element', async ({ page, goto }) => {

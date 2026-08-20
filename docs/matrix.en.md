@@ -30,7 +30,7 @@ A pure function in `matrix.ts`: given row/column, whether it's on the last row/c
 
 ### Context menu
 
-Matrices use MathLive's native row/column menu items in the same menu as the editor's native commands and **Unwrap**. `onMfContextMenu` targets the nearest atom using each cell's actual bounds and keeps an empty placeholder selected. Menu-item `pointerdown` no longer bubbles back into the mathfield, preventing MathLive's delayed command from being retargeted to another cell or the root `lines` environment.
+Matrices use MathLive's native row/column menu items in the same menu as the editor's native commands and **Unwrap**. `onMfContextMenu` targets the nearest atom using each cell's actual bounds and keeps an empty placeholder selected. Menu-item `pointerdown` no longer bubbles back into the mathfield, and row/column commands restore the saved cell atom before execution so MathLive's delayed command cannot target another cell or the root `lines` environment.
 
 ## Design choices
 
