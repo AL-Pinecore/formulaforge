@@ -4,11 +4,12 @@ Purpose: the core editing surface. Palette elements are dragged into the `<math-
 
 ## Files
 
-- `app/components/EquationWorkspace.vue` — workspace (field init, event orchestration, drag/drop, preview, state publishing)
+- `app/components/EquationWorkspace.vue` — workspace (field init, event orchestration, insertion callbacks, state publishing)
 - `app/editor/EditorHistory.ts` — semantic public-LaTeX + caret-position history
 - `app/editor/MathLiveAdapter.ts` — centralized MathLive public/private model access
 - `app/editor/SelectionController.ts` — caret-offset and placeholder geometry
 - `app/editor/TextController.ts` — text atom queries, input/delete rebuilding, empty boxes, and font styles
+- `app/editor/DragController.ts` — drag/drop events, target state, mirror field, and preview lifecycle
 - `app/components/EquationPalette.vue` — element palette (categories, search, tooltip, drag origin)
 - `app/utils/drag-payload.ts` — shared drag state (`draggedElementId` + MIME type)
 - `app/data/equation-elements.ts` — definitions of 200+ elements
@@ -52,11 +53,13 @@ The drag starts in `EquationPalette.vue`'s `onDragStart`: it writes the element 
 
 ### Insertion preview (mirror field)
 
-The preview uses a second offscreen `math-field` (`ensureMirrorField`):
+`DragController` owns the second offscreen `math-field`, current drop target, preview rAF/timer, and the `onDragOver`, `onDragLeave`, `onDrop`, and `dispose()` lifecycle:
 
-1. `updateInsertionPreview` computes the target offset via `SelectionController.offsetFromPoint`;
-2. `renderPreview` overlays the mirror on the real field, sets `mirror.value = mf.value`, then `mirror.insert(...)`;
-3. MathLive renders async, so `schedulePreviewSnapshot` uses rAF plus a `setTimeout(32ms)` fallback, then `snapshotPreview` copies the mirror's `.ML__latex` DOM into a static HTML overlay.
+1. it computes the target via `SelectionController.offsetFromPoint` and the placeholder hit-test API;
+2. it overlays the mirror on the real field, sets `mirror.value = mf.value`, then calls `mirror.insert(...)`;
+3. because MathLive renders asynchronously, it uses rAF plus a `setTimeout(32ms)` fallback before copying the mirror's `.ML__latex` DOM into a static HTML overlay.
+
+Font-style hit-testing and Text hints query only public `TextController` functions; the controller does not inspect Text's internal atom structure. The workspace supplies only insertion, file-loading, and Vue-state callbacks.
 
 The mirror shares MathLive's renderer, so the preview is pixel-identical.
 

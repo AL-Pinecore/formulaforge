@@ -1,11 +1,10 @@
 <script setup lang="ts">
 import type { MathfieldElement } from 'mathlive'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { getElementByCommand, getElementById } from '~/data/equation-elements'
-import { DRAG_ELEMENT_MIME, draggedElementId } from '~/utils/drag-payload'
+import { getElementByCommand } from '~/data/equation-elements'
 import { restoreEmptyGroupLatex } from '~/utils/empty-group'
 import { isAccentConstructLatex } from '~/utils/accent'
-import { FONT_STYLES, isFontStyleElement } from '~/utils/font-styles'
+import { isFontStyleElement } from '~/utils/font-styles'
 import { ensurePlaceholderSupport } from '~/utils/mathfield-placeholder'
 import { ensureAccentPositioning } from '~/utils/mathfield-accent'
 import { removeElementAtPlaceholder } from '~/utils/remove-empty-element'
@@ -25,6 +24,7 @@ import { useI18n } from '~/composables/useI18n'
 import { invoke } from '@tauri-apps/api/core'
 import { isTauriRuntime } from '~/composables/useEquationExport'
 import { EditorHistory } from '~/editor/EditorHistory'
+import { DragController, type DragPreviewBox } from '~/editor/DragController'
 import {
   disableNativeHistory,
   ensureMathMode,
@@ -37,7 +37,6 @@ import {
 import {
   enterPlaceholder,
   isSinglePlaceholderSelection,
-  offsetFromPoint,
   placeholderIndexAtPoint,
   selectPlaceholderAtPoint,
 } from '~/editor/SelectionController'
@@ -61,7 +60,6 @@ import {
   snapCaretIntoEmptyText,
   textGroupAtCaret,
   textGroupNearPosition,
-  textGroupRangeAtPoint,
   type TextHint,
 } from '~/editor/TextController'
 
@@ -77,7 +75,6 @@ const emit = defineEmits<{
 
 const { t } = useI18n()
 
-const PREVIEW_GREY = '#9ca3af'
 const PLACEHOLDER_CLICK_PAD = 10
 const TEXT_FILE_EXTENSIONS = ['tex', 'latex', 'txt', 'md', 'markdown']
 const MAX_FILE_SIZE = 1_000_000
@@ -109,33 +106,40 @@ const dragging = ref(false)
 let contextUnwrapTarget: UnwrapTarget | null = null
 let contextMatrixTarget: InternalAtom | null = null
 const insertionPreview = ref<string | null>(null)
-const previewBox = ref<{ left: number; top: number; width: number; height: number } | null>(null)
+const previewBox = ref<DragPreviewBox | null>(null)
 const textHints = ref<TextHint[]>([])
 const previewTextHints = ref<TextHint[]>([])
 const visibleTextHints = computed(() => insertionPreview.value ? previewTextHints.value : textHints.value)
 const caretTextBox = ref<{ left: number; top: number; width: number; height: number } | null>(null)
 const emptyTextCaretBox = ref<{ left: number; top: number; width: number; height: number } | null>(null)
 let mathfield: MathfieldElement | null = null
-let mirrorField: MathfieldElement | null = null
 let disposed = false
-let previewRaf = 0
-let snapshotRaf = 0
-let snapshotTimer: ReturnType<typeof setTimeout> | null = null
 let textHintRaf = 0
 let fractionRaf = 0
 let fractionObserver: MutationObserver | null = null
-let lastPreviewKey = ''
-let dragOffset = -1
-let dragPlaceholderIndex = -1
-let dragApplyFont = false
-let dragX = -1
-let dragY = -1
 
 const history = new EditorHistory()
 
 function getMf(): MathfieldElement | null {
   return mathfield
 }
+
+const dragController = new DragController(
+  {
+    getMathfield: getMf,
+    getContainer: () => containerEl.value,
+    setDragging: (value) => { dragging.value = value },
+    setPreview: (html, box, hints) => {
+      insertionPreview.value = html
+      previewBox.value = box
+      previewTextHints.value = hints
+    },
+    insertElement: (...args) => { void insertElement(...args) },
+    insertLatex: (...args) => { void insertLatex(...args) },
+    loadFile: loadDroppedFile,
+  },
+  { fontSize: props.fontSize, displayStyle: props.displayStyle },
+)
 
 function emitUndoState() {
   emit('undo-state', history.canUndo, history.canRedo)
@@ -444,18 +448,6 @@ async function restoreImeAfterBlur() {
   }
 }
 
-function hasDragPayload(event: DragEvent): boolean {
-  const types = event.dataTransfer?.types
-  const typeList = types ? Array.from(types) : []
-  return Boolean(
-    draggedElementId.value ||
-      typeList.includes(DRAG_ELEMENT_MIME) ||
-      typeList.includes('text/plain') ||
-      typeList.includes('Files') ||
-      (event.dataTransfer && event.dataTransfer.files.length > 0),
-  )
-}
-
 function isAcceptedTextFile(file: File): boolean {
   if (file.size > MAX_FILE_SIZE) {
     return false
@@ -465,6 +457,25 @@ function isAcceptedTextFile(file: File): boolean {
     return true
   }
   return file.type.startsWith('text/')
+}
+
+function loadDroppedFile(file: File): void {
+  if (!isAcceptedTextFile(file)) {
+    emit('toast', t('toast.onlyTextFiles'), 'error')
+    return
+  }
+  file
+    .text()
+    .then((contents) => {
+      const mf = getMf()
+      if (!mf || !contents.trim()) return
+      if (mf.value !== contents) {
+        mf.setValue(addTextBoundaries(contents), { mode: 'math', silenceNotifications: true })
+      }
+      publishState(mf)
+      emit('toast', t('toast.loadedFile', { file: file.name }), 'success')
+    })
+    .catch(() => emit('toast', t('toast.couldNotRead'), 'error'))
 }
 
 function configureMathfield(mf: MathfieldElement) {
@@ -509,271 +520,16 @@ async function ensureMathfield(): Promise<MathfieldElement | null> {
   return null
 }
 
-async function ensureMirrorField(): Promise<MathfieldElement | null> {
-  if (mirrorField) {
-    return mirrorField
-  }
-  try {
-    await customElements.whenDefined('math-field')
-  } catch {
-    return null
-  }
-  const mirror = document.createElement('math-field') as MathfieldElement
-  mirror.setAttribute('tabindex', '-1')
-  mirror.setAttribute('aria-hidden', 'true')
-  mirror.classList.add('workspace-mirror')
-  mirror.readOnly = true
-  mirror.mathVirtualKeyboardPolicy = 'manual'
-  // Offscreen & hidden: this field computes the post-insertion LaTeX and is
-  // briefly shown over the real field as the insertion preview. It must match
-  // the field's box model (transparent background, text color, no selection
-  // highlight) so the preview is pixel-identical to the final result.
-  mirror.style.position = 'fixed'
-  mirror.style.left = '-10000px'
-  mirror.style.top = '0'
-  mirror.style.visibility = 'hidden'
-  mirror.style.pointerEvents = 'none'
-  mirror.style.background = 'transparent'
-  mirror.style.color = 'var(--text)'
-  mirror.style.zIndex = '50'
-  mirror.style.setProperty('--selection-background-color', 'transparent')
-  mirror.style.setProperty('--contains-highlight-background-color', 'transparent')
-  mirror.style.fontSize = `${props.fontSize}px`
-  document.body.appendChild(mirror)
-  ensureAccentPositioning(mirror)
-  mirrorField = mirror
-  return mirror
+function onDragOver(event: DragEvent): void {
+  dragController.onDragOver(event)
 }
 
-function updateInsertionPreview(event: DragEvent) {
-  const element = draggedElementId.value ? getElementById(draggedElementId.value) : undefined
-  const mf = getMf()
-  if (!element || !mf) {
-    hidePreview()
-    return
-  }
-  let offset = offsetFromPoint(mf, event.clientX, event.clientY)
-  if (!Number.isInteger(offset) || offset < 0) {
-    // The cursor is over the field's empty area; clamp to the end of the
-    // content instead of falling back to the caret (which would make the
-    // preview jump around).
-    const rect = mf.getBoundingClientRect()
-    const inside =
-      event.clientX >= rect.left &&
-      event.clientX <= rect.right &&
-      event.clientY >= rect.top &&
-      event.clientY <= rect.bottom
-    offset = inside ? mf.lastOffset : -1
-  }
-  dragOffset = offset
-  dragPlaceholderIndex = placeholderIndexAtPoint(mf, event.clientX, event.clientY)
-  dragApplyFont = isFontStyleElement(element.id) && textGroupRangeAtPoint(mf, event.clientX, event.clientY) !== null
-  dragX = event.clientX
-  dragY = event.clientY
-  const key = dragApplyFont
-    ? `${element.id}|${mf.value}|font:${dragOffset}`
-    : dragPlaceholderIndex >= 0
-      ? `${element.id}|${mf.value}|placeholder:${dragPlaceholderIndex}`
-      : `${element.id}|${mf.value}|${dragOffset}`
-  if (key === lastPreviewKey) {
-    return
-  }
-  lastPreviewKey = key
-  cancelAnimationFrame(previewRaf)
-  previewRaf = requestAnimationFrame(async () => {
-    await ensureMirrorField()
-    if (!dragging.value) {
-      return
-    }
-    void renderPreview(element)
-  })
+function onDragLeave(event: DragEvent): void {
+  dragController.onDragLeave(event)
 }
 
-function renderPreview(element: EquationElement) {
-  const mf = getMf()
-  const mirror = mirrorField
-  if (!mf || !mirror) {
-    return
-  }
-  ensurePlaceholderSupport(mirror)
-  const rect = mf.getBoundingClientRect()
-  // Position the mirror exactly over the field so the preview shares the
-  // field's box (and its placeholder boxes the field's coordinates for
-  // hit-testing). The mirror is rendered by the same MathLive renderer as the
-  // field, so the preview is pixel-identical to the final result.
-  mirror.style.left = `${rect.left}px`
-  mirror.style.top = `${rect.top}px`
-  mirror.style.width = `${rect.width}px`
-  mirror.style.height = `${rect.height}px`
-  mirror.value = mf.value
-  if (dragApplyFont) {
-    const style = FONT_STYLES[element.id]
-    const range = textGroupRangeAtPoint(mf, dragX, dragY)
-    if (style && range) {
-      mirror.applyStyle(style, { range })
-    }
-    schedulePreviewSnapshot(mirror)
-    return
-  }
-  let positionSet = false
-  if (dragPlaceholderIndex >= 0) {
-    positionSet = selectPlaceholderAtPoint(mirror, dragX, dragY)
-  }
-  if (!positionSet) {
-    mirror.position = dragOffset >= 0 ? dragOffset : mf.position
-  }
-  // An empty Text box previews as the gray word "Text" (the same word the hint
-  // shows after the drop), so the preview has real width and pushes the
-  // surrounding content aside.
-  const previewLatex = withEmptyTextSentinel(element.latex)
-  mirror.insert(addTextBoundaries(previewLatex), {
-    insertionMode: 'replaceSelection',
-    selectionMode: 'item',
-    format: 'latex',
-    silenceNotifications: true,
-  })
-  const range = mirror.selection?.ranges?.[0]
-  if (previewLatex === element.latex && range && range[0] !== range[1]) {
-    mirror.applyStyle({ color: PREVIEW_GREY }, { range })
-  }
-  schedulePreviewSnapshot(mirror)
-}
-
-// MathLive renders fields asynchronously (on the next animation frame), so the
-// mirror must not be shown directly — that would flash stale content. Instead,
-// snapshot its rendered DOM once it has settled and display the snapshot as a
-// static, pixel-identical overlay. A rAF gives the fast path in real browsers;
-// a setTimeout fallback covers environments that suppress nested rAF callbacks
-// (e.g. happy-dom) — the two are idempotent.
-function schedulePreviewSnapshot(mirror: MathfieldElement) {
-  const run = () => {
-    if (!dragging.value || disposed) {
-      return
-    }
-    snapshotPreview(mirror)
-  }
-  cancelAnimationFrame(snapshotRaf)
-  if (snapshotTimer) {
-    clearTimeout(snapshotTimer)
-    snapshotTimer = null
-  }
-  snapshotRaf = requestAnimationFrame(run)
-  snapshotTimer = setTimeout(run, 32)
-}
-
-function snapshotPreview(mirror: MathfieldElement) {
-  const latex = mirror.shadowRoot?.querySelector('.ML__latex') as HTMLElement | null
-  if (!latex) {
-    insertionPreview.value = null
-    previewTextHints.value = []
-    previewBox.value = null
-    return
-  }
-  // Hide the real field while the preview is up so its original (un-reflowed)
-  // content never shows through — including placeholder boxes whose top edge
-  // would otherwise peek above the overlay.
-  const mf = getMf()
-  if (mf) {
-    mf.style.visibility = 'hidden'
-  }
-  const box = latex.getBoundingClientRect()
-  previewBox.value = { left: box.left, top: box.top, width: box.width, height: box.height }
-  previewTextHints.value = collectTextHints(mirror)
-  insertionPreview.value = `<span class="ML__container">${latex.outerHTML}</span>`
-}
-
-function hidePreview() {
-  cancelAnimationFrame(previewRaf)
-  cancelAnimationFrame(snapshotRaf)
-  if (snapshotTimer) {
-    clearTimeout(snapshotTimer)
-    snapshotTimer = null
-  }
-  if (mathfield) {
-    mathfield.style.visibility = ''
-  }
-  lastPreviewKey = ''
-  dragOffset = -1
-  dragPlaceholderIndex = -1
-  dragApplyFont = false
-  dragX = -1
-  dragY = -1
-  insertionPreview.value = null
-  previewTextHints.value = []
-  previewBox.value = null
-}
-
-function onDragOver(event: DragEvent) {
-  if (!hasDragPayload(event)) {
-    return
-  }
-  event.preventDefault()
-  dragging.value = true
-  updateInsertionPreview(event)
-  if (event.dataTransfer) {
-    event.dataTransfer.dropEffect = 'copy'
-  }
-}
-
-function onDragLeave(event: DragEvent) {
-  const related = event.relatedTarget
-  if (!related || !containerEl.value?.contains(related as Node)) {
-    dragging.value = false
-    hidePreview()
-  }
-}
-
-function onDrop(event: DragEvent) {
-  event.preventDefault()
-  const offset = dragOffset
-  const placeholderIndex = dragPlaceholderIndex
-  const x = dragX
-  const y = dragY
-  dragging.value = false
-  hidePreview()
-  const dataTransfer = event.dataTransfer
-  const typeList = dataTransfer?.types ? Array.from(dataTransfer.types) : []
-
-  const file = dataTransfer?.files?.[0]
-  if (file) {
-    if (!isAcceptedTextFile(file)) {
-      emit('toast', t('toast.onlyTextFiles'), 'error')
-      return
-    }
-    file
-      .text()
-      .then((contents) => {
-        const mf = getMf()
-        if (!mf || !contents.trim()) {
-          return
-        }
-        if (mf.value !== contents) {
-          mf.setValue(addTextBoundaries(contents), { mode: 'math', silenceNotifications: true })
-        }
-        publishState(mf)
-        emit('toast', t('toast.loadedFile', { file: file.name }), 'success')
-      })
-      .catch(() => emit('toast', t('toast.couldNotRead'), 'error'))
-    return
-  }
-
-  // Only trust the in-memory id when the drag payload advertises the custom
-  // MIME type; a stale id must not hijack plain-text or file drops.
-  const id =
-    dataTransfer?.getData(DRAG_ELEMENT_MIME) ||
-    (typeList.includes(DRAG_ELEMENT_MIME) ? draggedElementId.value : null)
-  draggedElementId.value = null
-  if (id) {
-    const element = getElementById(id)
-    if (element) {
-      void insertElement(element, offset, placeholderIndex, x, y)
-      return
-    }
-  }
-  const text = dataTransfer?.getData('text/plain')?.trim()
-  if (text) {
-    void insertLatex(text, offset)
-  }
+function onDrop(event: DragEvent): void {
+  dragController.onDrop(event)
 }
 
 async function insertElement(
@@ -2165,9 +1921,7 @@ function setFontSize(px: number) {
   if (mf) {
     mf.style.fontSize = `${px}px`
   }
-  if (mirrorField) {
-    mirrorField.style.fontSize = `${px}px`
-  }
+  dragController.setFontSize(px)
   scheduleUpdateTextHints()
 }
 
@@ -2184,9 +1938,7 @@ function setDisplayStyle(value: boolean) {
     mf.position = Math.min(position, mf.lastOffset)
     scheduleUpdateTextHints()
   }
-  if (mirrorField) {
-    mirrorField.defaultMode = value ? 'math' : 'inline-math'
-  }
+  dragController.setDisplayStyle(value)
 }
 
 onMounted(() => {
@@ -2199,20 +1951,11 @@ onBeforeUnmount(() => {
   window.removeEventListener('keydown', onWindowKeydown)
   document.removeEventListener('click', onSuggestionClick, true)
   disposed = true
-  cancelAnimationFrame(previewRaf)
-  cancelAnimationFrame(snapshotRaf)
+  dragController.dispose()
   cancelAnimationFrame(textHintRaf)
   cancelAnimationFrame(fractionRaf)
   fractionObserver?.disconnect()
   fractionObserver = null
-  if (snapshotTimer) {
-    clearTimeout(snapshotTimer)
-    snapshotTimer = null
-  }
-  if (mirrorField) {
-    mirrorField.remove()
-    mirrorField = null
-  }
 })
 
 watch(() => props.fontSize, (px) => setFontSize(px))

@@ -131,6 +131,7 @@ describe('EquationWorkspace drag and drop', () => {
     expect(field.style.visibility).toBe('')
     expect(draggedElementId.value).toBeNull()
     wrapper.unmount()
+    expect(document.body.contains(mirror)).toBe(false)
   })
 
   it('does not steal focus from an unfocused mathfield during dragover', async () => {

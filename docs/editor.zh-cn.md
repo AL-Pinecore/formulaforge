@@ -4,11 +4,12 @@
 
 ## 涉及文件
 
-- `app/components/EquationWorkspace.vue` — 工作区组件（字段初始化、事件编排、拖放、预览、状态发布）
+- `app/components/EquationWorkspace.vue` — 工作区组件（字段初始化、事件编排、插入回调、状态发布）
 - `app/editor/EditorHistory.ts` — 公共 LaTeX + 光标位置的语义历史
 - `app/editor/MathLiveAdapter.ts` — MathLive 公共/私有模型访问的集中适配层
 - `app/editor/SelectionController.ts` — caret 偏移与 placeholder 几何命中
 - `app/editor/TextController.ts` — Text 原子查询、输入/删除重建、空盒与字体样式
+- `app/editor/DragController.ts` — 拖放事件、落点状态、mirror 字段与插入预览生命周期
 - `app/components/EquationPalette.vue` — 元素面板（分类、搜索、tooltip、拖拽起点）
 - `app/utils/drag-payload.ts` — 拖拽共享状态（`draggedElementId` + MIME 类型）
 - `app/data/equation-elements.ts` — 200+ 个公式元素的定义
@@ -52,11 +53,13 @@ MathLive 的原生历史会记录 `setValue()`，但 Text 边界 marker、空盒
 
 ### 插入预览（mirror 字段）
 
-插入预览用第二个离屏 `math-field`（`ensureMirrorField`）实现：
+`DragController` 持有第二个离屏 `math-field`、当前拖拽落点和预览的 rAF/timer，并负责 `onDragOver`、`onDragLeave`、`onDrop` 与 `dispose()`：
 
-1. `updateInsertionPreview` 用 `SelectionController.offsetFromPoint` 算出目标偏移；
-2. `renderPreview` 把 mirror 覆盖到真实字段上方，`mirror.value = mf.value`，再 `mirror.insert(...)`；
-3. MathLive 异步渲染，所以 `schedulePreviewSnapshot` 用 rAF + `setTimeout(32ms)` 双保险等它 settle，再 `snapshotPreview` 抓取 mirror 的 `.ML__latex` DOM 存为静态 HTML 覆盖显示。
+1. 用 `SelectionController.offsetFromPoint` 与 placeholder 命中 API 算出目标位置；
+2. 把 mirror 覆盖到真实字段上方，`mirror.value = mf.value`，再 `mirror.insert(...)`；
+3. MathLive 异步渲染，所以用 rAF + `setTimeout(32ms)` 双保险等它 settle，再抓取 mirror 的 `.ML__latex` DOM 存为静态 HTML 覆盖显示。
+
+字体样式命中与 Text hint 只通过 `TextController` 的公开函数查询；控制器不读取 Text 的内部原子结构。工作区只提供实际插入、文件加载和 Vue 状态回调。
 
 mirror 与真实字段共用同一份 MathLive 渲染器，所以预览「像素级一致」。
 
