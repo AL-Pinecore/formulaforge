@@ -41,18 +41,19 @@ MathLive 渲染 accent 有几个偏差，`ensureAccentPositioning` 用一个 Mut
 
 ### 删除解包（`removeElementAtPlaceholder`）
 
-光标停在 placeholder 里按 Backspace/Delete 时，`unwrapElementAtCaret` 先把光标处 placeholder 替换成临时 marker（`\bigstar`）定位其在序列化里的位置，再还原，然后 `removeElementAtPlaceholder` 按十类规则把外层结构解包（推进真实内容、删空则整体移除）：
+光标停在 placeholder 里按 Backspace/Delete 时，`unwrapElementAtCaret` 先把光标处 placeholder 替换成临时 marker（`\bigstar`）定位其在序列化里的位置，再还原，然后 `removeElementAtPlaceholder` 按十一类规则把外层结构解包（推进真实内容、删空则整体移除）：
 
 1. `\frac` 等分数（双参数推进）
 2. `\overbrace` / `\underbrace`
 3. `\log`（基/参数双槽）
-4. 大运算符 `\sum`/`\int`/`\lim` 上下标
-5. 普通上/下标
-6. 单参数命令（排除 `\left`/`\begin` 等）
-7. 函数括号 `\sin(...)` 等
-8. `\sqrt[n]{}` 的可选指数
-9. `\left...\right` 及成对分隔符
-10. 矩阵/环境整体
+4. 长左/右箭头的上下标签（只移除当前选中的空 placeholder，保留另一标签和箭头）
+5. 大运算符 `\sum`/`\int`/`\lim` 上下标
+6. 普通上/下标
+7. 单参数命令（排除 `\left`/`\begin` 等）
+8. 函数括号 `\sin(...)` 等
+9. `\sqrt[n]{}` 的可选指数
+10. `\left...\right` 及成对分隔符
+11. 矩阵/环境整体
 
 每类都遵循「有真实内容则推进、全空则整结构删除」的语义。
 

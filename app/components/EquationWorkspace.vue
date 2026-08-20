@@ -2444,7 +2444,8 @@ function handleKeydown(event: KeyboardEvent) {
   }
   const info = mf.getElementInfo(mf.position)
   const isPlaceholder =
-    info?.latex != null && /^\\placeholder(?:\[[^\]]*\])?\{\}$/.test(info.latex)
+    isSinglePlaceholderSelection(mf) ||
+    (info?.latex != null && /^\\placeholder(?:\[[^\]]*\])?\{\}$/.test(info.latex))
   if (!isPlaceholder) {
     if (event.key === 'Backspace') {
       // Backspace on the last remaining character of a `\sqrt[n]{...}` index

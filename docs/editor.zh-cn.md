@@ -41,6 +41,8 @@ MathLive 的原生历史会记录 `setValue()`，但 Text 边界 marker、空盒
 - `#?` — 后续 placeholder；
 - `#@` — 保留当前选区内容。
 
+长左/右箭头模板同时提供箭头上方与下方两个 placeholder，元素面板预览也显示这两个空位。
+
 拖拽起点在 `EquationPalette.vue` 的 `onDragStart`：把元素 id 写入 `draggedElementId`，同时 `setData(DRAG_ELEMENT_MIME, id)` 和 `setData('text/plain', latex)` 双通道。`text/plain` 是兜底——允许把元素拖到外部编辑器。拖拽图像被设成透明 1px canvas（`transparentDragImage`），因为工作区自己画预览。
 
 ### 插入预览（mirror 字段）

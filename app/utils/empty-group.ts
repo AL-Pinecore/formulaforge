@@ -52,7 +52,10 @@ export function restoreEmptyGroupLatex(latex: string): string | null {
   // brace), \sqrt[n]{}. \placeholder is excluded so we never nest placeholders.
   result = result.replace(
     /\\(?!placeholder\b)([a-zA-Z]+(?:\[[^\]]*\])*)\{\}/g,
-    '\\$1{\\placeholder{}}',
+    (match, command: string) =>
+      /^(?:x|long)(?:left|right)arrow(?:\[[^\]]*\])?$/.test(command)
+        ? match
+        : `\\${command}{\\placeholder{}}`,
   )
 
   // Empty superscript/subscript: ^{}, _{}
@@ -78,7 +81,11 @@ export function restoreEmptyGroupLatex(latex: string): string | null {
 
   // Any remaining bare empty group {} (but not a \placeholder argument).
   result = result.replace(/\{\}/g, (match, offset) => {
-    if (/(?:\\placeholder(?:\[[^\]]*\])?)$/.test(result.slice(0, offset))) {
+    if (
+      /(?:\\placeholder(?:\[[^\]]*\])?|\\(?:x|long)(?:left|right)arrow(?:\[[^\]]*\])?)$/.test(
+        result.slice(0, offset),
+      )
+    ) {
       return match
     }
     return '{\\placeholder{}}'

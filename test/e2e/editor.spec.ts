@@ -1560,8 +1560,23 @@ test('renders the MathJax SVG preview from raw LaTeX input', async ({ page, goto
 test('renders MathLive labels above and below long arrows', async ({ page, goto }) => {
   await goto('/', { waitUntil: 'hydration' })
   const textarea = page.locator('.latex-textarea')
-  await insertElement(page, 'Long right arrow', 'Arrows')
-  await expect(textarea).toHaveValue('\\xrightarrow{}')
+  await insertElement(page, 'Long left arrow', 'Arrows')
+  await expect(
+    page.getByRole('button', { name: 'Insert Long left arrow', exact: true }).getByText('□'),
+  ).toHaveCount(2)
+  await expect(textarea).toHaveValue('\\xleftarrow[]{}')
+  const field = page.locator('math-field')
+  const placeholders = field.locator('text=▢').filter({ visible: true })
+  await expect(placeholders).toHaveCount(2)
+  await expect(field).toBeFocused()
+
+  await page.keyboard.press('Delete')
+  await expect(placeholders).toHaveCount(1)
+
+  await page.keyboard.press('Delete')
+  await expect(textarea).toHaveValue('\\xleftarrow{}')
+  await expect(placeholders).toHaveCount(0)
+
   await textarea.fill('\\longleftarrow[below]{above}')
   await textarea.blur()
   await expect(textarea).toHaveValue('\\xleftarrow[below]{above}')

@@ -41,18 +41,19 @@ MathLive renders accents with several offsets; `ensureAccentPositioning` correct
 
 ### Structural unwrap (`removeElementAtPlaceholder`)
 
-When Backspace/Delete is pressed with the caret in a placeholder, `unwrapElementAtCaret` briefly replaces the placeholder with a marker (`\bigstar`) to locate it in the serialized string, restores the value, then `removeElementAtPlaceholder` unwraps the enclosing structure according to ten rules (promoting real content, removing the whole structure when empty):
+When Backspace/Delete is pressed with the caret in a placeholder, `unwrapElementAtCaret` briefly replaces the placeholder with a marker (`\bigstar`) to locate it in the serialized string, restores the value, then `removeElementAtPlaceholder` unwraps the enclosing structure according to eleven rules (promoting real content, removing the whole structure when empty):
 
 1. `\frac` and friends (two-argument promotion)
 2. `\overbrace` / `\underbrace`
 3. `\log` (base / argument slots)
-4. large operators `\sum`/`\int`/`\lim` scripts
-5. plain super/subscripts
-6. single-argument commands (excluding `\left`/`\begin` etc.)
-7. function parens `\sin(...)` etc.
-8. the optional index of `\sqrt[n]{}`
-9. `\left...\right` and paired delimiters
-10. matrices / environments
+4. labels above/below long arrows (remove only the selected empty placeholder, keeping the other label and the arrow)
+5. large operators `\sum`/`\int`/`\lim` scripts
+6. plain super/subscripts
+7. single-argument commands (excluding `\left`/`\begin` etc.)
+8. function parens `\sin(...)` etc.
+9. the optional index of `\sqrt[n]{}`
+10. `\left...\right` and paired delimiters
+11. matrices / environments
 
 Each rule follows "promote real content, remove the whole structure when empty".
 

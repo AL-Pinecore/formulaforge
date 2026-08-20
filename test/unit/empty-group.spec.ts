@@ -24,6 +24,11 @@ describe('restoreEmptyGroupLatex', () => {
     expect(restoreEmptyGroupLatex('\\sin{}')).toBe('\\sin{\\placeholder{}}')
   })
 
+  it('keeps intentionally removed long-arrow labels empty', () => {
+    expect(restoreEmptyGroupLatex('\\xleftarrow[]{}')).toBeNull()
+    expect(restoreEmptyGroupLatex('\\longrightarrow{}')).toBeNull()
+  })
+
   it('restores empty superscripts and subscripts', () => {
     expect(restoreEmptyGroupLatex('x^{}')).toBe('x^{\\placeholder{}}')
     expect(restoreEmptyGroupLatex('x_{}')).toBe('x_{\\placeholder{}}')

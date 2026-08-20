@@ -41,6 +41,8 @@ History stores only the result of `publicLatex()`. Undo/redo passes it through `
 - `#?` — subsequent placeholders;
 - `#@` — preserves the current selection.
 
+The long left/right arrow templates provide placeholders both above and below the arrow, and the palette preview shows both slots.
+
 The drag starts in `EquationPalette.vue`'s `onDragStart`: it writes the element id to `draggedElementId`, and `setData` on both `DRAG_ELEMENT_MIME` and `text/plain` (the plain-text channel is a fallback so elements can be dragged into external editors). The drag image is a transparent 1px canvas (`transparentDragImage`) because the workspace draws its own preview.
 
 ### Insertion preview (mirror field)

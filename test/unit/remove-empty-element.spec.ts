@@ -29,6 +29,23 @@ describe('removeElementAtPlaceholder', () => {
     expect(remove('\\frac{\\placeholder{}}{\\placeholder{}}')).toEqual({ latex: '', caretOffset: 0 })
   })
 
+  it('removes only the selected empty arrow label', () => {
+    const left = '\\longleftarrow[\\placeholder{}]{\\placeholder{}}'
+    const right = '\\xrightarrow[\\placeholder{}]{\\placeholder{}}'
+    expect(remove(left)).toEqual({
+      latex: '\\longleftarrow{\\placeholder{}}',
+      caretOffset: '\\longleftarrow'.length,
+    })
+    expect(remove(left, 2)).toEqual({
+      latex: '\\longleftarrow[\\placeholder{}]{}',
+      caretOffset: '\\longleftarrow[\\placeholder{}]{'.length,
+    })
+    expect(remove(right)).toEqual({
+      latex: '\\xrightarrow{\\placeholder{}}',
+      caretOffset: '\\xrightarrow'.length,
+    })
+  })
+
   it('promotes the numerator when deleting the empty denominator', () => {
     expect(remove('\\frac{x}{\\placeholder{}}')).toEqual({ latex: 'x', caretOffset: 0 })
   })

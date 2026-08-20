@@ -302,6 +302,45 @@ function removeLog(latex: string, ph: { start: number; end: number }): RemoveRes
   return null
 }
 
+// Delete removes only the selected empty label from an annotated long arrow.
+function removeEmptyArrowLabels(latex: string, ph: { start: number; end: number }): RemoveResult | null {
+  const commands = /\\(?:x(?:left|right)arrow|long(?:left|right)arrow)\b/g
+  let match
+  while ((match = commands.exec(latex))) {
+    let optionalOpen = match.index + match[0].length
+    while (/\s/.test(latex.charAt(optionalOpen))) optionalOpen++
+    if (latex.charAt(optionalOpen) !== '[') continue
+    const optionalClose = latex.indexOf(']', optionalOpen + 1)
+    if (optionalClose < 0) continue
+    let argumentOpen = optionalClose + 1
+    while (/\s/.test(latex.charAt(argumentOpen))) argumentOpen++
+    if (latex.charAt(argumentOpen) !== '{') continue
+    const argumentClose = matchingBrace(latex, argumentOpen)
+    if (argumentClose < 0) continue
+    if (
+      ph.start > optionalOpen &&
+      ph.end <= optionalClose &&
+      isPlaceholderOnly(latex.slice(optionalOpen + 1, optionalClose))
+    ) {
+      return {
+        latex: latex.slice(0, optionalOpen) + latex.slice(optionalClose + 1),
+        caretOffset: optionalOpen,
+      }
+    }
+    if (
+      ph.start > argumentOpen &&
+      ph.end <= argumentClose &&
+      isPlaceholderOnly(latex.slice(argumentOpen + 1, argumentClose))
+    ) {
+      return {
+        latex: latex.slice(0, argumentOpen + 1) + latex.slice(argumentClose),
+        caretOffset: argumentOpen + 1,
+      }
+    }
+  }
+  return null
+}
+
 // `\sqrt[#]{#}`: deleting the optional-index placeholder drops the index and
 // leaves the (possibly empty) main argument behind, turning the n-th root into
 // a plain root. A second Backspace on the body then removes the whole command.
@@ -440,6 +479,7 @@ export function removeElementAtPlaceholder(latex: string, caretOffset: number): 
     removeFraction(latex, ph) ??
     removeOverUnder(latex, ph) ??
     removeLog(latex, ph) ??
+    removeEmptyArrowLabels(latex, ph) ??
     removeOperator(latex, ph) ??
     removeScripts(latex, ph) ??
     removeSingleArgCommand(latex, ph) ??

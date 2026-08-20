@@ -24,6 +24,13 @@ describe('equation element palette data', () => {
     }
   })
 
+  it('creates editable labels above and below long arrows', () => {
+    expect(getElementById('longleftarrow')?.latex).toBe('\\longleftarrow[#?]{#0}')
+    expect(getElementById('longrightarrow')?.latex).toBe('\\longrightarrow[#?]{#0}')
+    expect(getElementById('longleftarrow')?.display).toBe('\\longleftarrow[\\square]{\\square}')
+    expect(getElementById('longrightarrow')?.display).toBe('\\longrightarrow[\\square]{\\square}')
+  })
+
   it('assigns every element to a known category', () => {
     const known = new Set(ELEMENT_CATEGORY_ORDER)
     for (const element of EQUATION_ELEMENTS) {
