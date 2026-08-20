@@ -21,7 +21,7 @@
 </div>
 
 ## 开发声明
-FormulaForge是由AI辅助开发的一款软件，参与了功能实现，测试，文档，以及代码审查。
+FormulaForge是由AI辅助开发的一款软件，参与了功能实现，测试，文档，以及代码审查。  
 使用模型：GPT-5.6 Sol, DeepSeek V4 Pro
 
 ## 功能

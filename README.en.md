@@ -18,10 +18,10 @@ A drag-and-drop LaTeX equation editor desktop app. Drag equation elements from t
 
 </div>
 
-## Disclaimer
-This project is completely developed by AI, aiming to test AI's ability in developing project.
+## Development
+FormulaForge is an AI-assisted program. AI models are used extensively on implementation, testing, documentation, and code review.  
+Used Models：GPT-5.6 Sol, DeepSeek V4 Pro
 
-Model used: ChatGPT 5.6 Sol, Deepseek V4 Pro
 ## Features
 
 - **Drag-and-drop editing**: 200+ equation elements (operators, functions, fractions, roots, sums/integrals, Greek letters, logic/set symbols, arrows, scripts, matrices, and more), insertable by click or drag.
