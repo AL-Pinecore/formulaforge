@@ -7,7 +7,7 @@
 - `app/utils/matrix.ts` — Enter/Delete 键的增删决策
 - `app/editor/MathLiveAdapter.ts` — MathLive 私有模型的类型与唯一访问入口
 - `app/editor/MatrixController.ts` — 矩阵上下文读取与几何命中
-- `app/components/EquationWorkspace.vue` — 右键菜单与命令执行
+- `app/editor/ContextMenuController.ts` — 右键目标、菜单配置与命令执行
 
 ## 工作机制
 
@@ -34,7 +34,7 @@ MathLive 的公开 API 不暴露矩阵结构，`MathLiveAdapter.internalModel` �
 
 ### 右键菜单
 
-矩阵和 cases 直接使用 MathLive 原生的行列菜单项，`aligned` 复用其中的增删行菜单项；它们与编辑器原生命令和「解包」共用同一个菜单。`onMfContextMenu` 按各 cell 的实际边界定位最近的原子，空 placeholder 会保持选中。菜单项的 `pointerdown` 不再冒泡回 math-field；增删行列执行前还会恢复右键时保存的 cell 原子，避免 MathLive 的延迟命令作用到其他 cell 或根 `lines` 环境。
+矩阵和 cases 直接使用 MathLive 原生的行列菜单项，`aligned` 复用其中的增删行菜单项；它们与编辑器原生命令和「解包」共用同一个菜单。`ContextMenuController` 按各 cell 的实际边界定位最近的原子，空 placeholder 会保持选中。菜单项的 `pointerdown` 不再冒泡回 math-field；增删行列执行前还会恢复右键时保存的 cell 原子，避免 MathLive 的延迟命令作用到其他 cell 或根 `lines` 环境。
 
 ## 设计取舍
 

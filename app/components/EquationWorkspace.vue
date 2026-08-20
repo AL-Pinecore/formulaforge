@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import type { MathfieldElement } from 'mathlive'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { getElementByCommand } from '~/data/equation-elements'
 import { restoreEmptyGroupLatex } from '~/utils/empty-group'
 import { isAccentConstructLatex } from '~/utils/accent'
 import { isFontStyleElement } from '~/utils/font-styles'
@@ -9,9 +8,7 @@ import { ensurePlaceholderSupport } from '~/utils/mathfield-placeholder'
 import { ensureAccentPositioning } from '~/utils/mathfield-accent'
 import { removeElementAtPlaceholder } from '~/utils/remove-empty-element'
 import { normalizePortableLatex } from '~/utils/latex-normalize'
-import { DISABLED_LATEX_AUTOCOMPLETE_COMMANDS } from '~/utils/latex-autocomplete'
-import { matrixCommandsForKey, type MatrixCommand } from '~/utils/matrix'
-import { unwrapCommandLatex } from '~/utils/unwrap-element'
+import { matrixCommandsForKey } from '~/utils/matrix'
 import {
   addTextBoundaries,
   isEmptyTextLatex,
@@ -25,14 +22,12 @@ import { invoke } from '@tauri-apps/api/core'
 import { isTauriRuntime } from '~/composables/useEquationExport'
 import { EditorHistory } from '~/editor/EditorHistory'
 import { DragController, type DragPreviewBox } from '~/editor/DragController'
+import { AutocompleteController } from '~/editor/AutocompleteController'
+import { ContextMenuController } from '~/editor/ContextMenuController'
 import {
   disableNativeHistory,
   ensureMathMode,
-  firstElementRangeAfter,
   formatLatexErrors,
-  internalModel,
-  typedCommandName,
-  type InternalAtom,
 } from '~/editor/MathLiveAdapter'
 import {
   enterPlaceholder,
@@ -40,11 +35,7 @@ import {
   placeholderIndexAtPoint,
   selectPlaceholderAtPoint,
 } from '~/editor/SelectionController'
-import {
-  matrixAtPoint,
-  matrixContextAtCaret,
-  matrixOffsetAtPoint,
-} from '~/editor/MatrixController'
+import { matrixContextAtCaret } from '~/editor/MatrixController'
 import {
   applyFontStyle,
   clampOffsetOutsideText,
@@ -81,30 +72,8 @@ const MAX_FILE_SIZE = 1_000_000
 // ponytail: practical ceiling; raise this if formulas genuinely need 100+ columns.
 const MAX_MATRIX_COLUMNS = 100
 
-type MatrixMenuCommand =
-  | MatrixCommand
-  | 'addColumnBefore'
-  | 'addRowBefore'
-
-const MATRIX_MENU_COMMANDS: Record<string, MatrixMenuCommand> = {
-  'add-row-above': 'addRowBefore',
-  'add-row-below': 'addRowAfter',
-  'add-column-before': 'addColumnBefore',
-  'add-column-after': 'addColumnAfter',
-  'delete-row': 'removeRow',
-  'delete-column': 'removeColumn',
-}
-
-interface UnwrapTarget {
-  range: [number, number]
-  latex: string
-  caretOffset: number
-}
-
 const containerEl = ref<HTMLDivElement | null>(null)
 const dragging = ref(false)
-let contextUnwrapTarget: UnwrapTarget | null = null
-let contextMatrixTarget: InternalAtom | null = null
 const insertionPreview = ref<string | null>(null)
 const previewBox = ref<DragPreviewBox | null>(null)
 const textHints = ref<TextHint[]>([])
@@ -140,6 +109,23 @@ const dragController = new DragController(
   },
   { fontSize: props.fontSize, displayStyle: props.displayStyle },
 )
+
+const autocompleteController = new AutocompleteController({
+  getMathfield: getMf,
+  insertElement: (element) => { void insertElement(element) },
+  commit: (mf) => {
+    publishState(mf)
+    scheduleUpdateTextHints()
+  },
+})
+
+const contextMenuController = new ContextMenuController({
+  unwrapLabel: () => t('workspace.unwrap'),
+  restoreEmptyGroups,
+  publishState,
+  updateTextHints: scheduleUpdateTextHints,
+  selectionChanged: onSelectionChange,
+})
 
 function emitUndoState() {
   emit('undo-state', history.canUndo, history.canRedo)
@@ -492,7 +478,7 @@ function configureMathfield(mf: MathfieldElement) {
   ensureAccentPositioning(mf)
   observeFractionRendering(mf)
   attachImeBlocker(mf)
-  configureContextMenu(mf)
+  contextMenuController.configure(mf)
   publishState(mf)
 }
 
@@ -624,114 +610,6 @@ async function insertLatex(text: string, targetOffset?: number) {
     focus: true,
     scrollIntoView: true,
   })
-}
-
-// Mathstyle switch commands (`\displaystyle`, ...). They are `{:rest}` commands,
-// so MathLive's native completion inserts them in a fresh parse context where
-// the rest is empty, producing an ineffective `{\displaystyle}`. They are
-// completed by wrapping the first following atom instead.
-const STYLE_SWITCH_COMMANDS = new Set([
-  'displaystyle',
-  'textstyle',
-  'scriptstyle',
-  'scriptscriptstyle',
-])
-
-// Commands whose completion inserts a root atom (`isRoot: true`), replacing the
-// model root with an environment that serializes to '' and cannot be cleared.
-// `\displaylines` is the only `\command`-completable one (`\begin{...}`
-// environments are not reachable through single-command completion).
-const ROOT_ENVIRONMENT_COMMANDS = new Set(['displaylines'])
-
-// Completing a typed `\command` inserts the matching palette element (with its
-// full placeholder template) instead of MathLive's bare `\command{□}`. Style
-// switches and root environments are handled specially; everything else keeps
-// the native completion behavior.
-function completeCommand(mf: MathfieldElement, event: KeyboardEvent): boolean {
-  if (mf.mode !== 'latex') {
-    return false
-  }
-  const name = typedCommandName(mf)
-  if (!name) {
-    return false
-  }
-  const element = getElementByCommand(name)
-  if (element) {
-    event.preventDefault()
-    event.stopPropagation()
-    // Discard the in-progress command and switch back to math mode using
-    // MathLive's own completion path, then insert the element like a drag-drop.
-    mf.executeCommand(['complete', 'reject'])
-    void insertElement(element)
-    return true
-  }
-  if (DISABLED_LATEX_AUTOCOMPLETE_COMMANDS.has(name)) {
-    event.preventDefault()
-    event.stopPropagation()
-    mf.executeCommand(['complete', 'reject'])
-    return true
-  }
-  if (STYLE_SWITCH_COMMANDS.has(name)) {
-    completeStyleSwitch(mf, name, event)
-    return true
-  }
-  if (ROOT_ENVIRONMENT_COMMANDS.has(name)) {
-    // Never let a root environment be inserted: it would replace the model root
-    // and leave the field in an un-clearable state. Discard the command.
-    event.preventDefault()
-    event.stopPropagation()
-    mf.executeCommand(['complete', 'reject'])
-    return true
-  }
-  return false
-}
-
-// Complete a mathstyle switch by wrapping the first atom after the caret (its
-// scripts included), e.g. `\displaystyle` before `\sum_{}^{}` becomes
-// `\displaystyle\sum_{}^{}`. When nothing follows, insert an empty placeholder
-// group instead.
-function completeStyleSwitch(mf: MathfieldElement, name: string, event: KeyboardEvent): void {
-  event.preventDefault()
-  event.stopPropagation()
-  mf.executeCommand(['complete', 'reject'])
-  const range = firstElementRangeAfter(mf)
-  if (range) {
-    mf.selection = { ranges: [range] }
-    // `#@` captures the selection; no braces so `\displaystyle` stays a `{:rest}`
-    // switch applied to the captured content (`\displaystyle\sum`) instead of an
-    // extra `{...}` group.
-    mf.insert(`\\${name}#@`, {
-      insertionMode: 'replaceSelection',
-      format: 'latex',
-      mode: 'math',
-      focus: true,
-      scrollIntoView: true,
-    })
-  } else {
-    mf.insert(`\\${name}{#0}`, {
-      selectionMode: 'placeholder',
-      format: 'latex',
-      mode: 'math',
-      focus: true,
-      scrollIntoView: true,
-    })
-  }
-  publishState(mf)
-  scheduleUpdateTextHints()
-}
-
-function onSuggestionClick(event: MouseEvent): void {
-  const item = (event.target as Element | null)?.closest<HTMLElement>(
-    '#mathlive-suggestion-popover [data-command]',
-  )
-  const name = item?.dataset.command?.match(/^\\([a-zA-Z]+)/)?.[1]
-  const mf = getMf()
-  if (!name || !DISABLED_LATEX_AUTOCOMPLETE_COMMANDS.has(name) || mf?.mode !== 'latex') {
-    return
-  }
-  event.preventDefault()
-  event.stopImmediatePropagation()
-  mf.executeCommand(['complete', 'reject'])
 }
 
 const RESTORE_PLACEHOLDER_GLOBAL_RE = /\\placeholder(?:\[[^\]]*\])?\{\}/g
@@ -878,143 +756,6 @@ let caretArrivedByNavigation = false
 // `selection-change` disambiguates which side the caret reached.
 let lastArrowDirection: 'left' | 'right' | null = null
 
-function executeMatrixCommands(mf: MathfieldElement, commands: readonly MatrixMenuCommand[]) {
-  mf.focus()
-  for (const command of commands) {
-    mf.executeCommand(command)
-    if (command !== 'addRowBefore' && command !== 'addRowAfter') continue
-    const context = matrixContextAtCaret(mf)
-    const model = internalModel(mf)
-    const right = context?.matrix.getCell(context.row, 1)?.[0]
-    if (context?.matrix.environmentName !== 'aligned' || !model || !right) continue
-    mf.position = model.offsetOf(right)
-    mf.insert('=\\placeholder{}', {
-      mode: 'math',
-      format: 'latex',
-      selectionMode: 'after',
-      silenceNotifications: true,
-    })
-    const left = context.matrix.getCell(context.row, 0)?.[0]
-    if (left) mf.position = model.offsetOf(left)
-  }
-  restoreEmptyGroups(mf)
-  publishState(mf)
-  scheduleUpdateTextHints()
-}
-
-function executeContextMatrixCommand(command: MatrixMenuCommand) {
-  const mf = getMf()
-  const model = mf && internalModel(mf)
-  const target = contextMatrixTarget
-  if (!mf || !model || !target) return
-  const offset = model.offsetOf(target)
-  if (offset < 0) return
-  if (target.type === 'placeholder') mf.selection = { ranges: [[offset - 1, offset]] }
-  else mf.position = offset
-  executeMatrixCommands(mf, [command])
-}
-
-function elementRange(mf: MathfieldElement, end: number, latex: string): [number, number] | null {
-  for (let start = end; start >= 0; start--) {
-    if (mf.getValue(start, end) === latex) return [start, end]
-  }
-  return null
-}
-
-function unwrapTargetAtPoint(
-  mf: MathfieldElement,
-  x: number,
-  y: number,
-): UnwrapTarget | null {
-  const model = internalModel(mf)
-  let offset = mf.getOffsetFromPoint(x, y)
-  let area = Infinity
-  for (let candidate = 0; candidate <= mf.lastOffset; candidate++) {
-    const bounds = mf.getElementInfo(candidate)?.bounds
-    if (
-      bounds &&
-      x >= bounds.left &&
-      x <= bounds.left + bounds.width &&
-      y >= bounds.top &&
-      y <= bounds.top + bounds.height &&
-      bounds.width * bounds.height < area
-    ) {
-      offset = candidate
-      area = bounds.width * bounds.height
-    }
-  }
-  let atom = model?.at(offset)
-  const seen = new Set<number>()
-  while (model && atom) {
-    const end = model.offsetOf(atom)
-    if (seen.has(end)) {
-      atom = atom.parent
-      continue
-    }
-    seen.add(end)
-    const latex = mf.getElementInfo(end)?.latex
-    if (!latex) {
-      atom = atom.parent
-      continue
-    }
-    const replacement = unwrapCommandLatex(latex)
-    const range = replacement != null && elementRange(mf, end, latex)
-    if (range) {
-      let occurrence = 0
-      for (let candidate = 0; candidate < end; candidate++) {
-        if (mf.getElementInfo(candidate)?.latex === latex) occurrence++
-      }
-      let index = -1
-      for (let candidate = 0; candidate <= occurrence; candidate++) {
-        index = mf.value.indexOf(latex, index + 1)
-      }
-      if (index >= 0) {
-        return {
-          range,
-          latex: mf.value.slice(0, index) + replacement + mf.value.slice(index + latex.length),
-          caretOffset: index + replacement.length,
-        }
-      }
-    }
-    atom = atom.parent
-  }
-  return null
-}
-
-function unwrapContextTarget() {
-  const mf = getMf()
-  const target = contextUnwrapTarget
-  if (!mf || !target) return
-  const publicCaretOffset = normalizePublicLatex(target.latex.slice(0, target.caretOffset)).length
-  mf.setValue(target.latex, { mode: 'math', silenceNotifications: true })
-  restoreEmptyGroups(mf)
-  mf.position = publicStringOffsetToModel(mf, publicCaretOffset)
-  publishState(mf)
-  scheduleUpdateTextHints()
-}
-
-function configureContextMenu(mf: MathfieldElement) {
-  mf.menuItems = [
-    ...(mf.menuItems ?? []).map((item) => {
-      const command = 'id' in item && item.id ? MATRIX_MENU_COMMANDS[item.id] : undefined
-      if (!command) return item
-      const rowCommand = command === 'addRowBefore' || command === 'addRowAfter' || command === 'removeRow'
-      return {
-        ...item,
-        ...(rowCommand ? { visible: () => matrixContextAtCaret(mf) !== null } : {}),
-        onMenuSelect: () => executeContextMatrixCommand(command),
-      }
-    }),
-    { type: 'divider' },
-    {
-      id: 'unwrap-element',
-      label: () => t('workspace.unwrap'),
-      visible: () => contextUnwrapTarget !== null,
-      onMenuSelect: unwrapContextTarget,
-    },
-  ]
-}
-
 function handleMatrixResizeKey(event: KeyboardEvent, mf: MathfieldElement): boolean {
   if (
     (event.key !== 'Enter' && event.key !== 'Backspace' && event.key !== 'Delete') ||
@@ -1043,43 +784,13 @@ function handleMatrixResizeKey(event: KeyboardEvent, mf: MathfieldElement): bool
 
   event.preventDefault()
   event.stopPropagation()
-  executeMatrixCommands(mf, commands)
+  contextMenuController.executeMatrixCommands(mf, commands)
   return true
 }
 
 function onMfContextMenu(event: MouseEvent) {
   const mf = getMf()
-  const model = mf && internalModel(mf)
-  if (!mf || !model) return
-
-  const unwrap = contextUnwrapTarget ?? unwrapTargetAtPoint(mf, event.clientX, event.clientY)
-
-  const matrix = matrixAtPoint(
-    mf,
-    event.clientX,
-    event.clientY,
-    Math.max(20, props.fontSize),
-  )
-  const offset = matrix
-    ? matrixOffsetAtPoint(mf, matrix, event.clientX, event.clientY)
-    : mf.getOffsetFromPoint(event.clientX, event.clientY)
-  if (offset == null || offset < 0) return
-  const atom = model.at(offset)
-  if (atom?.type === 'placeholder') mf.selection = { ranges: [[offset - 1, offset]] }
-  else mf.position = offset
-  contextMatrixTarget = matrixContextAtCaret(mf) ? atom : null
-
-  mf.focus()
-  if (unwrap) {
-    contextUnwrapTarget = unwrap
-    mf.selection = { ranges: [unwrap.range] }
-    onSelectionChange()
-    requestAnimationFrame(() => {
-      if (contextUnwrapTarget !== unwrap) return
-      mf.selection = { ranges: [unwrap.range] }
-      onSelectionChange()
-    })
-  }
+  if (mf) contextMenuController.onContextMenu(mf, event, Math.max(20, props.fontSize))
 }
 
 const NON_ASCII_RE = /[^\x00-\x7F]/
@@ -1234,7 +945,7 @@ function handleKeydown(event: KeyboardEvent) {
     !event.altKey &&
     !event.shiftKey
   ) {
-    if (completeCommand(mf, event)) return
+    if (autocompleteController.completeCommand(mf, event)) return
   }
   const textInput = handleTextInput(
     mf,
@@ -1669,22 +1380,7 @@ function onMfPointerDown(event: PointerEvent) {
   if (!mf) {
     return
   }
-  // MathLive dispatches a menu command after a short blink animation. Do not
-  // let the menu item's earlier pointerdown retarget the formula selection.
-  if (
-    event.composedPath().some(
-      (node) => node instanceof HTMLElement && node.getAttribute('role') === 'menuitem',
-    )
-  ) {
-    event.stopPropagation()
-    return
-  }
-  contextUnwrapTarget = null
-  contextMatrixTarget = null
-  if (event.button === 2) {
-    contextUnwrapTarget = unwrapTargetAtPoint(mf, event.clientX, event.clientY)
-    return
-  }
+  if (contextMenuController.handlePointerDown(mf, event)) return
   // Clicking an empty Text box: take over the click so the caret lands in
   // front of the gray "Text" word and the field really gets keyboard focus
   // (MathLive's own click handling lands on the invisible phantom atoms and
@@ -1943,13 +1639,13 @@ function setDisplayStyle(value: boolean) {
 
 onMounted(() => {
   window.addEventListener('keydown', onWindowKeydown)
-  document.addEventListener('click', onSuggestionClick, true)
+  document.addEventListener('click', autocompleteController.onSuggestionClick, true)
   void ensureMathfield()
 })
 
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', onWindowKeydown)
-  document.removeEventListener('click', onSuggestionClick, true)
+  document.removeEventListener('click', autocompleteController.onSuggestionClick, true)
   disposed = true
   dragController.dispose()
   cancelAnimationFrame(textHintRaf)

@@ -7,7 +7,7 @@ Purpose: structural editing of array environments (matrix / cases / aligned) —
 - `app/utils/matrix.ts` — Enter/Delete decision logic
 - `app/editor/MathLiveAdapter.ts` — private MathLive model types and sole access point
 - `app/editor/MatrixController.ts` — matrix context lookup and geometry hit-testing
-- `app/components/EquationWorkspace.vue` — context menu and command execution
+- `app/editor/ContextMenuController.ts` — context targets, menu configuration, and command execution
 
 ## How it works
 
@@ -34,7 +34,7 @@ A newly inserted `aligned` row is completed as `\placeholder{} &= \placeholder{}
 
 ### Context menu
 
-Matrices and cases use MathLive's native row/column menu items, while `aligned` reuses the row insertion/deletion items; all share one menu with the editor's native commands and **Unwrap**. `onMfContextMenu` targets the nearest atom using each cell's actual bounds and keeps an empty placeholder selected. Menu-item `pointerdown` no longer bubbles back into the mathfield, and row/column commands restore the saved cell atom before execution so MathLive's delayed command cannot target another cell or the root `lines` environment.
+Matrices and cases use MathLive's native row/column menu items, while `aligned` reuses the row insertion/deletion items; all share one menu with the editor's native commands and **Unwrap**. `ContextMenuController` targets the nearest atom using each cell's actual bounds and keeps an empty placeholder selected. Menu-item `pointerdown` no longer bubbles back into the mathfield, and row/column commands restore the saved cell atom before execution so MathLive's delayed command cannot target another cell or the root `lines` environment.
 
 ## Design choices
 

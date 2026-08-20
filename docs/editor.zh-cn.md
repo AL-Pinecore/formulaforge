@@ -10,6 +10,8 @@
 - `app/editor/SelectionController.ts` — caret 偏移与 placeholder 几何命中
 - `app/editor/TextController.ts` — Text 原子查询、输入/删除重建、空盒与字体样式
 - `app/editor/DragController.ts` — 拖放事件、落点状态、mirror 字段与插入预览生命周期
+- `app/editor/AutocompleteController.ts` — 反斜杠命令识别、补全与禁用项拦截
+- `app/editor/ContextMenuController.ts` — matrix/unwrap 右键目标、菜单配置与命令执行
 - `app/components/EquationPalette.vue` — 元素面板（分类、搜索、tooltip、拖拽起点）
 - `app/utils/drag-payload.ts` — 拖拽共享状态（`draggedElementId` + MIME 类型）
 - `app/data/equation-elements.ts` — 200+ 个公式元素的定义
@@ -73,7 +75,7 @@ MathLive 的 `getOffsetFromPoint` 在上下标/分组下不可靠（很多位置
 
 在 `<math-field>` 里直接输入 `\` + 命令名（例如 `\mathrm`、`\frac`、`\alpha`），MathLive 会弹出补全建议。按 `Enter` / `Tab` 完成时，工作区不采用 MathLive 原生的裸 `\command{□}` 补全，而是插入面板里对应的完整元素模板（含 `#0`/`#?` 占位符）。
 
-- `handleKeydown` 在 `latex` 模式下拦截 `Enter`/`Tab`，走 `completeCommand`。
+- `handleKeydown` 在 `latex` 模式下拦截 `Enter`/`Tab`，交给 `AutocompleteController.completeCommand`。
 - 命令名从 MathLive 内部的 `latexgroup` 原子读取（`typedCommandName`）——补全进行中 `mf.value` 序列化为空串，取不到命令。
 - 命令 → 元素的映射在 `equation-elements.ts` 的 `getElementByCommand`：id 与命令名一致的元素优先（`\sqrt` → 平方根而非 n 次方根）；命令被多个元素共享且没有 id 匹配的（`\left`、`\begin`）不映射，交给原生补全。
 - 完成时先 `executeCommand(['complete', 'reject'])` 丢弃正在输入的命令、切回 math 模式，再复用 `insertElement` 插入——与拖拽完全一致（文本命令会得到空文本盒哨兵 + 边界 marker，其余得到占位符）。
@@ -85,7 +87,7 @@ MathLive 的 `getOffsetFromPoint` 在上下标/分组下不可靠（很多位置
 
 ### 原生右键菜单与解包
 
-工作区直接扩展 MathLive 的 `menuItems`，因此编辑器原生命令、矩阵增删行列和项目的「解包」共用同一个右键菜单。右键按下时从指针命中的最小原子向父级查找，选中并高光最内层、源码含分组参数的命令。
+`ContextMenuController` 扩展 MathLive 的 `menuItems`，因此编辑器原生命令、矩阵增删行列和项目的「解包」共用同一个右键菜单。它缓存右键时的 matrix/unwrap 目标，从指针命中的最小原子向父级查找，选中并高光最内层、源码含分组参数的命令。
 
 「解包」去掉这一层命令，把 `{...}`、`[...]` 及上下标分组中的内容按源码顺序拼接，并过滤空 placeholder。例如 `\\sqrt{\\frac{a}{b}}` 在分数上右键会得到 `\\sqrt{ab}`。环境边界、左右定界符和 placeholder 本身不参与通用解包。
 
