@@ -20,10 +20,9 @@
 
 </div>
 
-## 声明
-本项目完全由AI完成开发，旨在测试AI项目能力。
-
-使用模型：ChatGPT 5.6 Sol, Deepseek V4 Pro
+## 开发声明
+FormulaForge是由AI辅助开发的一款软件，参与了功能实现，测试，文档，以及代码审查。
+使用模型：GPT-5.6 Sol, DeepSeek V4 Pro
 
 ## 功能
 
