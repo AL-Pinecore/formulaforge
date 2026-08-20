@@ -17,7 +17,13 @@
 
 `useEquation.ts` 在模块层持有 `ref`（`latex` / `errors` / `canUndo` / `canRedo` / `fontSize` / `displayStyle`），`useEquation()` 每次返回同一份引用。所有组件（工作区、工具栏、导出面板）共享同一状态，避免逐层传 props。
 
-工作区通过 `emit('latex-change', value, errors)` 和 `emit('undo-state', ...)` 把字段状态回灌给这个单例。
+工作区通过 `emit('latex-change', value, errors)` 和 `emit('undo-state', ...)` 把公式及语义历史状态回灌给这个单例。
+
+### 语义 undo / redo
+
+MathLive 的原生历史会记录 `setValue()`，但 Text 边界 marker、空盒 phantom、placeholder 恢复都需要内部 `setValue()`；直接 `applyStyle()` 又不会建立原生快照。因此工作区禁用 MathLive 历史，在 `publishState()` 汇合点记录最多 1000 个「公共 LaTeX + 光标位置」快照。
+
+历史只保存 `publicLatex()` 的结果，undo/redo 时再通过 `loadLatex()` 重建 marker、phantom 和 placeholder。这保证内部修复不会成为额外的撤销步骤，同时覆盖键盘输入/删除、面板点击与拖放、Text/Accent 重建、字体样式、矩阵增删、源码编辑、文件导入和清空。建立新快照会丢弃 redo 分支；工具栏及 `Cmd/Ctrl+Z`、`Cmd/Ctrl+Shift+Z`、`Ctrl+Y` 共用同一历史。
 
 ### `<math-field>` 初始化
 
@@ -69,6 +75,7 @@ MathLive 的 `getOffsetFromPoint` 在上下标/分组下不可靠（很多位置
 - **拖拽用双 MIME 通道**：自定义 MIME 用于应用内，`text/plain` 用于向外兼容，避免元素 id 被外部文本拖入劫持（`onDrop` 只在 payload 声明了自定义 MIME 时才信任 `draggedElementId`）。
 - **预览用 mirror 而非画布**：直接复用 MathLive 渲染，避免二次实现一套排版。
 - **`ensureMathfield` 轮询**：自定义元素升级和 shadow root 准备是异步的，轮询是跨引擎最稳的等待方式。
+- **公共 LaTeX 作为 undo 边界**：内部 crack 只负责重建模型，不进入用户历史；所有公式改动统一经过 `publishState()`，避免逐功能维护逆操作。
 
 ## 已知边界
 

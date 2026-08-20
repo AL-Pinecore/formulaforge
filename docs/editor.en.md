@@ -17,7 +17,13 @@ Purpose: the core editing surface. Palette elements are dragged into the `<math-
 
 `useEquation.ts` holds `ref`s at module scope (`latex`, `errors`, `canUndo`, `canRedo`, `fontSize`, `displayStyle`); `useEquation()` always returns the same instance. Every component (workspace, toolbar, export panel) shares this state instead of threading props.
 
-The workspace feeds the singleton back via `emit('latex-change', value, errors)` and `emit('undo-state', ...)`.
+The workspace feeds the equation and semantic history state back via `emit('latex-change', value, errors)` and `emit('undo-state', ...)`.
+
+### Semantic undo / redo
+
+MathLive's native history records `setValue()`, while Text boundary markers, empty-box phantoms, and placeholder restoration all require internal `setValue()` calls; direct `applyStyle()` does not create a native snapshot at all. The workspace therefore disables MathLive history and records up to 1000 `public LaTeX + caret position` snapshots at the existing `publishState()` junction.
+
+History stores only the result of `publicLatex()`. Undo/redo passes it through `loadLatex()` to rebuild markers, phantoms, and placeholders. Internal repairs never become extra undo steps, while keyboard input/deletion, palette clicks and drops, Text/Accent rebuilding, font styles, matrix resizing, source edits, file imports, and clear all share the same history. A new snapshot drops the redo branch; toolbar actions and `Cmd/Ctrl+Z`, `Cmd/Ctrl+Shift+Z`, and `Ctrl+Y` use that same stack.
 
 ### `<math-field>` initialization
 
@@ -68,6 +74,7 @@ Typing `\` + a command name directly in the `<math-field>` (e.g. `\mathrm`, `\fr
 - **Dual MIME channels for drag**: custom MIME for in-app, `text/plain` for external compatibility; `onDrop` only trusts `draggedElementId` when the payload advertises the custom MIME.
 - **Mirror preview over a canvas**: reuses MathLive's renderer rather than reimplementing layout.
 - **`ensureMathfield` polling**: custom-element upgrade and shadow-root preparation are async; polling is the most robust wait across engines.
+- **Public LaTeX as the undo boundary**: internal cracks only rebuild the model and never enter user history; every equation mutation converges at `publishState()` instead of maintaining inverse commands feature by feature.
 
 ## Known limits
 

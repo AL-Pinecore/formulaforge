@@ -125,6 +125,15 @@ let dragApplyFont = false
 let dragX = -1
 let dragY = -1
 
+interface HistoryEntry {
+  latex: string
+  position: number
+}
+
+const HISTORY_LIMIT = 1000
+const history: HistoryEntry[] = []
+let historyIndex = -1
+
 // MathLive's getOffsetFromPoint is unreliable with sub/superscripts and groups:
 // it returns 0 (the start of the formula) for many positions, which makes the
 // drag preview jump to the beginning. Instead, derive the caret offset from the
@@ -521,13 +530,40 @@ function formatLatexErrors(errors: readonly LatexSyntaxError[]): string[] {
   })
 }
 
-function publishState(mf: MathfieldElement) {
+function disableNativeHistory(mf: MathfieldElement): void {
+  const controls = mf as unknown as {
+    stopRecording?: () => void
+    resetUndo?: () => void
+  }
+  controls.stopRecording?.()
+  controls.resetUndo?.()
+}
+
+function emitUndoState() {
+  emit('undo-state', historyIndex > 0, historyIndex >= 0 && historyIndex < history.length - 1)
+}
+
+function recordHistory(mf: MathfieldElement): void {
+  const entry = { latex: publicLatex(mf), position: mf.position }
+  if (history[historyIndex]?.latex === entry.latex) {
+    history[historyIndex] = entry
+    return
+  }
+  history.splice(historyIndex + 1)
+  history.push(entry)
+  if (history.length > HISTORY_LIMIT) history.shift()
+  historyIndex = history.length - 1
+}
+
+function publishState(mf: MathfieldElement, record = true) {
+  disableNativeHistory(mf)
+  if (record) recordHistory(mf)
   emit(
     'latex-change',
     publicLatex(mf),
     formatLatexErrors(mf.errors ?? []),
   )
-  emit('undo-state', mf.canUndo(), mf.canRedo())
+  emitUndoState()
 }
 
 function publicLatex(mf: MathfieldElement): string {
@@ -944,7 +980,8 @@ function onMfInput(mf: MathfieldElement) {
 }
 
 function onUndoStateChange(mf: MathfieldElement) {
-  emit('undo-state', mf.canUndo(), mf.canRedo())
+  disableNativeHistory(mf)
+  emitUndoState()
   scheduleUpdateTextHints()
 }
 
@@ -1604,10 +1641,10 @@ const CARET_MARKER = '\\bigstar'
 // placeholder atoms before the caret lands on the wrong token). Instead the
 // caret's placeholder is briefly replaced by a unique marker, located in the
 // serialized value, and the original value is restored immediately. Undo
-// recording is paused so the round-trip leaves the undo history untouched.
+// Native recording stays disabled; the semantic history never sees this round-trip.
 function unwrapElementAtCaret(mf: MathfieldElement): { latex: string; caretOffset: number } | null {
   const original = mf.value
-  const controls = mf as unknown as { stopRecording?: () => void; startRecording?: () => void }
+  const controls = mf as unknown as { stopRecording?: () => void }
   controls.stopRecording?.()
   let marked = ''
   try {
@@ -1621,9 +1658,9 @@ function unwrapElementAtCaret(mf: MathfieldElement): { latex: string; caretOffse
   } catch {
     marked = ''
   } finally {
-    controls.startRecording?.()
+    mf.setValue(original, { mode: 'math', silenceNotifications: true })
+    controls.stopRecording?.()
   }
-  mf.setValue(original, { mode: 'math', silenceNotifications: true })
   const markerIndex = marked.indexOf(CARET_MARKER)
   if (markerIndex < 0 || marked.indexOf(CARET_MARKER, markerIndex + 1) >= 0) {
     return null
@@ -1653,7 +1690,7 @@ function rootIndexAtomBeforeCaret(mf: MathfieldElement): boolean {
   }
   const position = mf.position
   const original = mf.value
-  const controls = mf as unknown as { stopRecording?: () => void; startRecording?: () => void }
+  const controls = mf as unknown as { stopRecording?: () => void }
   controls.stopRecording?.()
   let marked = ''
   try {
@@ -1667,9 +1704,9 @@ function rootIndexAtomBeforeCaret(mf: MathfieldElement): boolean {
   } catch {
     marked = ''
   } finally {
-    controls.startRecording?.()
+    mf.setValue(original, { mode: 'math', silenceNotifications: true })
+    controls.stopRecording?.()
   }
-  mf.setValue(original, { mode: 'math', silenceNotifications: true })
   mf.position = position
   const markerPos = marked.indexOf(CARET_MARKER)
   if (markerPos < 0) {
@@ -1937,11 +1974,34 @@ function hasNonAsciiText(data: string | null | undefined): boolean {
   return typeof data === 'string' && data.length > 0 && NON_ASCII_RE.test(data)
 }
 
+function handleUndoShortcut(event: KeyboardEvent): boolean {
+  const shortcut = event.key.toLowerCase()
+  if (
+    !event.altKey &&
+    (event.metaKey || event.ctrlKey) &&
+    (shortcut === 'z' || shortcut === 'y')
+  ) {
+    event.preventDefault()
+    event.stopPropagation()
+    if (shortcut === 'y' || event.shiftKey) redo()
+    else undo()
+    return true
+  }
+  return false
+}
+
+function onWindowKeydown(event: KeyboardEvent) {
+  const target = event.target as HTMLElement | null
+  if (target?.matches('input, textarea, [contenteditable="true"]')) return
+  handleUndoShortcut(event)
+}
+
 function onMfKeydown(event: KeyboardEvent) {
   // Re-assert the English input source on every key press so a manual switch
   // back to a non-Latin IME (e.g. Cmd+Space) while the field is focused is
   // reverted immediately instead of popping the candidate window.
   void requestEnglishIme()
+  if (handleUndoShortcut(event)) return
   // During IME composition the browser emits keydown events that carry the
   // composition state (`key === 'Process'` or `keyCode 229`); WKWebView even
   // reports `isComposing: false` there but still exposes the physical key in
@@ -2827,11 +2887,7 @@ function onPointerUp(event: PointerEvent) {
   })
 }
 
-function setLatex(value: string): { value: string; errors: string[] } {
-  const mf = getMf()
-  if (!mf) {
-    return { value, errors: [] }
-  }
+function loadLatex(mf: MathfieldElement, value: string): void {
   const internalValue = addTextBoundaries(value)
   if (mf.value !== internalValue) {
     mf.setValue(internalValue, { mode: 'math', silenceNotifications: true })
@@ -2843,6 +2899,15 @@ function setLatex(value: string): { value: string; errors: string[] } {
     mf.setValue(addTextBoundaries(restored), { mode: 'math', silenceNotifications: true })
   }
   ensureMathMode(mf)
+}
+
+function setLatex(value: string): { value: string; errors: string[] } {
+  const mf = getMf()
+  if (!mf) {
+    return { value, errors: [] }
+  }
+  loadLatex(mf, value)
+  publishState(mf)
   scheduleUpdateTextHints()
   return {
     value: publicLatex(mf),
@@ -2851,11 +2916,25 @@ function setLatex(value: string): { value: string; errors: string[] } {
 }
 
 function undo() {
-  getMf()?.executeCommand('undo')
+  const mf = getMf()
+  if (!mf || historyIndex <= 0) return
+  historyIndex--
+  const entry = history[historyIndex]!
+  loadLatex(mf, entry.latex)
+  mf.position = Math.min(entry.position, mf.lastOffset)
+  publishState(mf, false)
+  scheduleUpdateTextHints()
 }
 
 function redo() {
-  getMf()?.executeCommand('redo')
+  const mf = getMf()
+  if (!mf || historyIndex >= history.length - 1) return
+  historyIndex++
+  const entry = history[historyIndex]!
+  loadLatex(mf, entry.latex)
+  mf.position = Math.min(entry.position, mf.lastOffset)
+  publishState(mf, false)
+  scheduleUpdateTextHints()
 }
 
 function clear() {
@@ -2905,10 +2984,12 @@ function setDisplayStyle(value: boolean) {
 }
 
 onMounted(() => {
+  window.addEventListener('keydown', onWindowKeydown)
   void ensureMathfield()
 })
 
 onBeforeUnmount(() => {
+  window.removeEventListener('keydown', onWindowKeydown)
   disposed = true
   cancelAnimationFrame(previewRaf)
   cancelAnimationFrame(snapshotRaf)

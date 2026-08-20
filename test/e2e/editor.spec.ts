@@ -492,6 +492,46 @@ test('Delete right after a Text box edits the text without corrupting markers', 
   await expect(textarea).toHaveValue('\\text{jjjj}', { timeout: 10000 })
 })
 
+test('undo and redo use public LaTeX across Text rebuilds, source edits, and clear', async ({
+  page,
+  goto,
+}) => {
+  await goto('/', { waitUntil: 'hydration' })
+  const textarea = page.locator('.latex-textarea')
+  const undo = page.getByRole('button', { name: 'Undo', exact: true })
+  const redo = page.getByRole('button', { name: 'Redo', exact: true })
+
+  await insertElement(page, 'Text', 'Text')
+  await page.keyboard.type('ab')
+  await expect(textarea).toHaveValue('\\text{ab}', { timeout: 10000 })
+
+  await undo.click()
+  await expect(textarea).toHaveValue('\\text{a}')
+  await redo.click()
+  await expect(textarea).toHaveValue('\\text{ab}')
+
+  await textarea.fill('\\frac{1}{2}')
+  await textarea.blur()
+  await expect(textarea).toHaveValue('\\frac12')
+  await undo.click()
+  await expect(textarea).toHaveValue('\\text{ab}')
+  await redo.click()
+  await expect(textarea).toHaveValue('\\frac12')
+
+  await page.getByRole('button', { name: 'Clear', exact: true }).click()
+  await expect(textarea).toHaveValue('')
+  await page.keyboard.press('ControlOrMeta+z')
+  await expect(textarea).toHaveValue('\\frac12')
+  expect(await textarea.inputValue()).not.toMatch(/mkern|phantom|placeholder/)
+  await page.keyboard.press('ControlOrMeta+Shift+z')
+  await expect(textarea).toHaveValue('')
+
+  await undo.click()
+  await textarea.fill('x')
+  await textarea.blur()
+  await expect(redo).toBeDisabled()
+})
+
 test('typing after escaping an empty Text box keeps the box and input clean', async ({
   page,
   goto,
@@ -1087,6 +1127,60 @@ test('dragging a font style twice toggles it off', async ({ page, goto }) => {
 
   await dragStyleElement(page, 'mathbf', 'Insert Bold', target.x, target.y)
   await expect(textarea).toHaveValue('\\text{hi}', { timeout: 10000 })
+})
+
+test('undo covers direct font styling and matrix structure commands', async ({ page, goto }) => {
+  await goto('/', { waitUntil: 'hydration' })
+  const textarea = page.locator('.latex-textarea')
+  const field = page.locator('math-field')
+  const undo = page.getByRole('button', { name: 'Undo', exact: true })
+  const redo = page.getByRole('button', { name: 'Redo', exact: true })
+
+  await textarea.fill('\\text{hi}')
+  await textarea.blur()
+  await page.waitForTimeout(150)
+  const text = await field.evaluate((el) => {
+    const rect = el.shadowRoot!.querySelector('.ML__text')!.getBoundingClientRect()
+    return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 }
+  })
+  await dragStyleElement(page, 'mathbf', 'Insert Bold', text.x, text.y)
+  await expect(textarea).toHaveValue('\\textbf{hi}', { timeout: 10000 })
+  await undo.click()
+  await expect(textarea).toHaveValue('\\text{hi}')
+  await redo.click()
+  await expect(textarea).toHaveValue('\\textbf{hi}')
+
+  const matrix = '\\begin{matrix}a\\end{matrix}'
+  await textarea.fill(matrix)
+  await textarea.blur()
+  await page.waitForTimeout(150)
+  const cell = await field.evaluate((element) => {
+    const mf = element as unknown as {
+      lastOffset: number
+      getElementInfo(offset: number): {
+        latex?: string
+        bounds?: { left: number; top: number; width: number; height: number }
+      } | undefined
+    }
+    for (let offset = 0; offset <= mf.lastOffset; offset++) {
+      const info = mf.getElementInfo(offset)
+      if (info?.latex === 'a' && info.bounds) {
+        return {
+          x: info.bounds.left + info.bounds.width / 2,
+          y: info.bounds.top + info.bounds.height / 2,
+        }
+      }
+    }
+    return null
+  })
+  expect(cell).not.toBeNull()
+  await page.mouse.click(cell!.x, cell!.y, { button: 'right' })
+  await page.getByRole('menuitem', { name: 'Insert row below', exact: true }).click()
+  await expect(textarea).not.toHaveValue(matrix)
+  await undo.click()
+  await expect(textarea).toHaveValue(matrix)
+  await redo.click()
+  await expect(textarea).not.toHaveValue(matrix)
 })
 
 test('fraction numerator and denominator painted gaps are symmetric', async ({ page, goto }) => {

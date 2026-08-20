@@ -58,7 +58,7 @@ Each rule follows "promote real content, remove the whole structure when empty".
 
 ## Design choices
 
-- **Temporary marker for locating**: model offsets don't map reliably to string offsets inside operator branches (`\sum` serializes its scripts in reverse model order); marker round-trip is the only stable way. `stopRecording`/`startRecording` pauses undo so the round-trip never pollutes history.
+- **Temporary marker for locating**: model offsets don't map reliably to string offsets inside operator branches (`\sum` serializes its scripts in reverse model order); marker round-trip is the only stable way. Workspace history records public LaTeX only, so the marker round-trip never enters undo.
 - **MutationObserver over polling**: MathLive's re-render timing is unknown; an observer is the cheapest "correct immediately after render".
 
 ## Known limits

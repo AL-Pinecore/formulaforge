@@ -58,7 +58,7 @@ MathLive 渲染 accent 有几个偏差，`ensureAccentPositioning` 用一个 Mut
 
 ## 设计取舍
 
-- **临时 marker 定位**：模型 offset 与字符串 offset 在大运算符分支里不可靠映射（`\sum` 上下标序列化顺序与模型相反），用 marker 换位再定位是唯一稳定手段；`stopRecording`/`startRecording` 暂停 undo，保证来回不污染历史。
+- **临时 marker 定位**：模型 offset 与字符串 offset 在大运算符分支里不可靠映射（`\sum` 上下标序列化顺序与模型相反），用 marker 换位再定位是唯一稳定手段；工作区历史只记录公共 LaTeX，因此 marker 往返不会进入 undo。
 - **MutationObserver 而非定时轮询**：MathLive 重渲染时机不确定，observer 是「渲染后立即修正」的最省手段。
 
 ## 已知边界
