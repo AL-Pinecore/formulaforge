@@ -59,6 +59,9 @@ Typing `\` + a command name directly in the `<math-field>` (e.g. `\mathrm`, `\fr
 - The command name is read from MathLive's internal `latexgroup` atom (`typedCommandName`) — during composition `mf.value` serializes to an empty string, so the command can't be read from it.
 - Command → element mapping lives in `equation-elements.ts`'s `getElementByCommand`: elements whose id equals the command name win (`\sqrt` → square root, not the n-th root); commands shared by several elements with no id match (`\left`, `\begin`) stay unmapped and fall through to native completion.
 - On completion it first runs `executeCommand(['complete', 'reject'])` to discard the in-progress command and switch back to math mode, then reuses `insertElement` — identical to drag-and-drop (text commands get the empty text-box sentinel + boundary markers, everything else gets placeholders).
+- Two command classes get special handling:
+  - Style switches `\displaystyle`/`\textstyle`/`\scriptstyle`/`\scriptscriptstyle`: `completeStyleSwitch` wraps the first element after the caret (`firstElementRangeAfter` computes its caret range, scripts included), yielding `\displaystyle\sum`; with nothing following it inserts a `\displaystyle{□}` placeholder.
+  - Root environments (like `\displaylines`, whose `isRoot` atom would replace the model root): the completion is discarded so the field can't be left in an un-clearable broken state.
 
 ## Design choices
 

@@ -1405,26 +1405,120 @@ async function insertLatex(text: string, targetOffset?: number) {
   })
 }
 
+// Mathstyle switch commands (`\displaystyle`, ...). They are `{:rest}` commands,
+// so MathLive's native completion inserts them in a fresh parse context where
+// the rest is empty, producing an ineffective `{\displaystyle}`. They are
+// completed by wrapping the first following atom instead.
+const STYLE_SWITCH_COMMANDS = new Set([
+  'displaystyle',
+  'textstyle',
+  'scriptstyle',
+  'scriptscriptstyle',
+])
+
+// Commands whose completion inserts a root atom (`isRoot: true`), replacing the
+// model root with an environment that serializes to '' and cannot be cleared.
+// `\displaylines` is the only `\command`-completable one (`\begin{...}`
+// environments are not reachable through single-command completion).
+const ROOT_ENVIRONMENT_COMMANDS = new Set(['displaylines'])
+
 // Completing a typed `\command` inserts the matching palette element (with its
-// full placeholder template) instead of MathLive's bare `\command{□}`. Only the
-// commands that map to a palette element are intercepted; everything else keeps
+// full placeholder template) instead of MathLive's bare `\command{□}`. Style
+// switches and root environments are handled specially; everything else keeps
 // the native completion behavior.
 function completeCommand(mf: MathfieldElement, event: KeyboardEvent): boolean {
   if (mf.mode !== 'latex') {
     return false
   }
   const name = typedCommandName(mf)
-  const element = name ? getElementByCommand(name) : undefined
-  if (!element) {
+  if (!name) {
     return false
   }
+  const element = getElementByCommand(name)
+  if (element) {
+    event.preventDefault()
+    event.stopPropagation()
+    // Discard the in-progress command and switch back to math mode using
+    // MathLive's own completion path, then insert the element like a drag-drop.
+    mf.executeCommand(['complete', 'reject'])
+    void insertElement(element)
+    return true
+  }
+  if (STYLE_SWITCH_COMMANDS.has(name)) {
+    completeStyleSwitch(mf, name, event)
+    return true
+  }
+  if (ROOT_ENVIRONMENT_COMMANDS.has(name)) {
+    // Never let a root environment be inserted: it would replace the model root
+    // and leave the field in an un-clearable state. Discard the command.
+    event.preventDefault()
+    event.stopPropagation()
+    mf.executeCommand(['complete', 'reject'])
+    return true
+  }
+  return false
+}
+
+// Complete a mathstyle switch by wrapping the first atom after the caret (its
+// scripts included), e.g. `\displaystyle` before `\sum_{}^{}` becomes
+// `\displaystyle\sum_{}^{}`. When nothing follows, insert an empty placeholder
+// group instead.
+function completeStyleSwitch(mf: MathfieldElement, name: string, event: KeyboardEvent): void {
   event.preventDefault()
   event.stopPropagation()
-  // Discard the in-progress command and switch back to math mode using
-  // MathLive's own completion path, then insert the element like a drag-drop.
   mf.executeCommand(['complete', 'reject'])
-  void insertElement(element)
-  return true
+  const range = firstElementRangeAfter(mf)
+  if (range) {
+    mf.selection = { ranges: [range] }
+    // `#@` captures the selection; no braces so `\displaystyle` stays a `{:rest}`
+    // switch applied to the captured content (`\displaystyle\sum`) instead of an
+    // extra `{...}` group.
+    mf.insert(`\\${name}#@`, {
+      insertionMode: 'replaceSelection',
+      format: 'latex',
+      mode: 'math',
+      focus: true,
+      scrollIntoView: true,
+    })
+  } else {
+    mf.insert(`\\${name}{#0}`, {
+      selectionMode: 'placeholder',
+      format: 'latex',
+      mode: 'math',
+      focus: true,
+      scrollIntoView: true,
+    })
+  }
+  publishState(mf)
+  scheduleUpdateTextHints()
+}
+
+// The caret-offset range `[start, end]` of the first element after the caret
+// (an atom together with its scripts), or null when nothing follows. MathLive
+// stores a scripted operator's sub/superscript before the operator in the flat
+// atom array, so the range starts at the operator's leading `first` child
+// (minus one) and ends at the operator itself. Ancestors (e.g. the enclosing
+// `\frac`) are skipped because their range begins before the caret.
+function firstElementRangeAfter(mf: MathfieldElement): [number, number] | null {
+  const model = internalModel(mf)
+  if (!model?.atoms) {
+    return null
+  }
+  const position = mf.position
+  const startIndex = position === 0 ? 0 : position + 1
+  for (let i = startIndex; i < model.atoms.length; i++) {
+    const atom = model.atoms[i]!
+    if (atom.type === 'first' || atom.type === 'placeholder') {
+      continue
+    }
+    const end = model.offsetOf(atom)
+    const start = atom.firstChild ? model.offsetOf(atom.firstChild) - 1 : end - 1
+    if (start < position) {
+      continue
+    }
+    return [start, end]
+  }
+  return null
 }
 
 // The command name being composed in LaTeX mode, read from MathLive's internal
@@ -1611,6 +1705,7 @@ interface InternalAtom {
   parentBranch?: unknown
   body?: InternalAtom[]
   value?: string
+  firstChild?: InternalAtom
 }
 
 interface InternalMatrix extends InternalAtom {

@@ -88,6 +88,74 @@ test('completes a typed symbol command with Tab', async ({ page, goto }) => {
   await expect(page.locator('.latex-textarea')).toHaveValue('\\alpha', { timeout: 10000 })
 })
 
+async function placeCaretBeforeSum(page: import('@playwright/test').Page) {
+  await page.locator('math-field').evaluate((el) => {
+    const mf = el as unknown as {
+      focus(): void
+      position: number
+      _mathfield?: {
+        model?: {
+          atoms: { type: string; command?: string; firstChild?: unknown }[]
+          offsetOf(atom: unknown): number
+        }
+      }
+    }
+    mf.focus()
+    const model = mf._mathfield?.model
+    if (!model) {
+      return
+    }
+    for (const atom of model.atoms) {
+      if (atom.command === '\\sum') {
+        mf.position = atom.firstChild
+          ? model.offsetOf(atom.firstChild) - 1
+          : model.offsetOf(atom) - 1
+        return
+      }
+    }
+  })
+  await page.waitForTimeout(200)
+}
+
+test('completes \\displaystyle by wrapping the first following element', async ({ page, goto }) => {
+  await goto('/', { waitUntil: 'hydration' })
+  const textarea = page.locator('.latex-textarea')
+  await textarea.fill('\\frac{\\sum_{}^{}x}{}')
+  await textarea.blur()
+  await placeCaretBeforeSum(page)
+  await page.keyboard.type('\\displaystyle')
+  await page.keyboard.press('Enter')
+  await expect(textarea).toHaveValue('\\frac{{\\displaystyle\\sum_{}^{}}x}{}', { timeout: 10000 })
+})
+
+test('completes \\textstyle by wrapping only the first following element', async ({ page, goto }) => {
+  await goto('/', { waitUntil: 'hydration' })
+  const textarea = page.locator('.latex-textarea')
+  await textarea.fill('\\frac{xy}{}')
+  await textarea.blur()
+  await page.locator('math-field').evaluate((el) => {
+    const mf = el as unknown as { focus(): void; position: number }
+    mf.focus()
+    mf.position = 1
+  })
+  await page.waitForTimeout(200)
+  await page.keyboard.type('\\textstyle')
+  await page.keyboard.press('Enter')
+  await expect(textarea).toHaveValue('\\frac{{\\textstyle x}y}{}', { timeout: 10000 })
+})
+
+test('completing a root environment leaves the field usable', async ({ page, goto }) => {
+  await goto('/', { waitUntil: 'hydration' })
+  const textarea = page.locator('.latex-textarea')
+  await page.locator('math-field').evaluate((el) => (el as { focus(): void }).focus())
+  await page.waitForTimeout(200)
+  await page.keyboard.type('\\displayline')
+  await page.keyboard.press('Enter')
+  await expect(textarea).toHaveValue('', { timeout: 10000 })
+  await page.keyboard.type('y')
+  await expect(textarea).toHaveValue('y', { timeout: 10000 })
+})
+
 test('dragging a font style onto a Text box restyles it', async ({ page, goto }) => {
   await goto('/', { waitUntil: 'hydration' })
   await insertElement(page, 'Text', 'Text')
