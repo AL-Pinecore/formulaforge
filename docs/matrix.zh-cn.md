@@ -13,7 +13,7 @@
 
 MathLive 的公开 API 不暴露矩阵结构，工作区直接读私有模型 `mf._mathfield.model`（`internalModel`）。通过 `InternalAtom`/`InternalMatrix` 接口访问 array 原子的 `environmentName`、`rowCount`/`colCount`、`getCell(row, col)`，以及原子在模型里的父子关系（`parent`/`parentBranch`）。
 
-`isMatrix` 判定 atom 是 array 且 `environmentName` 匹配 `/matrix\*?$/`。
+`isMatrix` 判定 atom 是 array，且 `environmentName` 是矩阵、cases（含 `dcases`/`rcases`）或 `aligned` 环境。它们复用同一套行列定位和命令；cases 新单元格沿用通用 placeholder 恢复，`aligned` 则保持自身固定的对齐列结构。
 
 ### 光标上下文 `matrixContextAtCaret`
 
@@ -28,9 +28,11 @@ MathLive 的公开 API 不暴露矩阵结构，工作区直接读私有模型 `m
 
 `handleMatrixResizeKey` 拦截 Enter/Backspace/Delete（要求无修饰键、折叠光标或单 placeholder 选区），把上下文喂给 `matrixCommandsForKey`，有命令则 `executeMatrixCommands` 执行。
 
+新增 `aligned` 行时会自动补成 `\placeholder{} &= \placeholder{}`，保持每一行的等号和左右编辑位。
+
 ### 右键菜单
 
-矩阵直接使用 MathLive 原生的行列菜单项，并与编辑器原生命令和「解包」共用同一个菜单。`onMfContextMenu` 按各 cell 的实际边界定位最近的原子，空 placeholder 会保持选中。菜单项的 `pointerdown` 不再冒泡回 math-field；增删行列执行前还会恢复右键时保存的 cell 原子，避免 MathLive 的延迟命令作用到其他 cell 或根 `lines` 环境。
+矩阵和 cases 直接使用 MathLive 原生的行列菜单项，`aligned` 复用其中的增删行菜单项；它们与编辑器原生命令和「解包」共用同一个菜单。`onMfContextMenu` 按各 cell 的实际边界定位最近的原子，空 placeholder 会保持选中。菜单项的 `pointerdown` 不再冒泡回 math-field；增删行列执行前还会恢复右键时保存的 cell 原子，避免 MathLive 的延迟命令作用到其他 cell 或根 `lines` 环境。
 
 ## 设计取舍
 

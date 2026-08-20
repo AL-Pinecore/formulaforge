@@ -13,7 +13,7 @@ Purpose: structural editing of array environments (matrix / cases / aligned) —
 
 MathLive's public API doesn't expose matrix structure, so the workspace reads the private model `mf._mathfield.model` (`internalModel`). The `InternalAtom`/`InternalMatrix` interfaces expose the array atom's `environmentName`, `rowCount`/`colCount`, `getCell(row, col)`, and the atom's parent/child relationship (`parent`/`parentBranch`).
 
-`isMatrix` checks that the atom is an array whose `environmentName` matches `/matrix\*?$/`.
+`isMatrix` checks that the atom is an array whose `environmentName` is a matrix, cases (including `dcases`/`rcases`), or `aligned` environment. They reuse the same row/column targeting and commands; cases cells use the generic placeholder restoration, while aligned equations keep their fixed alignment-column structure.
 
 ### Caret context `matrixContextAtCaret`
 
@@ -28,9 +28,11 @@ A pure function in `matrix.ts`: given row/column, whether it's on the last row/c
 
 `handleMatrixResizeKey` intercepts Enter/Backspace/Delete (no modifiers, collapsed caret or single-placeholder selection), feeds the context into `matrixCommandsForKey`, and runs `executeMatrixCommands` when there are commands.
 
+A newly inserted `aligned` row is completed as `\placeholder{} &= \placeholder{}`, preserving its equals sign and editable slots on both sides.
+
 ### Context menu
 
-Matrices use MathLive's native row/column menu items in the same menu as the editor's native commands and **Unwrap**. `onMfContextMenu` targets the nearest atom using each cell's actual bounds and keeps an empty placeholder selected. Menu-item `pointerdown` no longer bubbles back into the mathfield, and row/column commands restore the saved cell atom before execution so MathLive's delayed command cannot target another cell or the root `lines` environment.
+Matrices and cases use MathLive's native row/column menu items, while `aligned` reuses the row insertion/deletion items; all share one menu with the editor's native commands and **Unwrap**. `onMfContextMenu` targets the nearest atom using each cell's actual bounds and keeps an empty placeholder selected. Menu-item `pointerdown` no longer bubbles back into the mathfield, and row/column commands restore the saved cell atom before execution so MathLive's delayed command cannot target another cell or the root `lines` environment.
 
 ## Design choices
 

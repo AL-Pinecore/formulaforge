@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { correctAccentPositioning } from '~/utils/mathfield-accent'
 
 const props = defineProps<{ latex: string }>()
 
@@ -32,6 +33,7 @@ async function render() {
     markup.value = escapeHtml(props.latex)
   }
   await nextTick()
+  if (innerEl.value) correctAccentPositioning(innerEl.value)
   fitToBox()
 }
 
@@ -56,7 +58,10 @@ onMounted(() => {
   // mount and the scale would otherwise stay stuck at 1.
   const el = innerEl.value
   if (el && typeof ResizeObserver !== 'undefined') {
-    resizeObserver = new ResizeObserver(() => fitToBox())
+    resizeObserver = new ResizeObserver(() => {
+      correctAccentPositioning(el)
+      fitToBox()
+    })
     resizeObserver.observe(el)
   }
 })

@@ -7,9 +7,10 @@ import type { MathfieldElement } from 'mathlive'
 // than centered over it). The preview/export (MathJax) renders these correctly,
 // so we correct the editor's `ML__accent-body` horizontally after each render.
 //
-// `\vec` renders as a zero-width combining character (the glyph is drawn to the
-// left of its anchor), so its visual half-width cannot be measured from the DOM
-// and is estimated from the font size (an over-arrow spans roughly half an em).
+// `\vec` renders as a zero-width combining character. Chromium paints its
+// glyph to the left of the anchor while WebKit paints it to the right, so its
+// visual bounds must come from canvas text metrics rather than the zero-width
+// DOM box.
 //
 // `\widehat`/`\widetilde` render as a stretchy glyph. MathLive natively sizes
 // the container to only half the content width, which makes it select the
@@ -20,10 +21,12 @@ import type { MathfieldElement } from 'mathlive'
 
 const fixed = new WeakMap<ShadowRoot, MutationObserver>()
 
-// Estimated half-width of the `\vec` arrow glyph, as a fraction of the font
-// size. Calibrated against MathLive's single-character rendering (where the
-// arrow is already correctly centered).
+// Fallback for browsers without painted text bounds in TextMetrics.
 const COMBINING_ARROW_HALF_EM = 0.26
+
+// WebKit keeps TeX's italic skew after the arrow glyph itself is centered.
+// Calibrated in Safari; macOS Tauri uses the same WebKit renderer.
+const WEBKIT_VEC_SKEW_EM = 0.21
 
 // The narrow wide-accent glyph is ~1.06em wide; beyond that, the wide variant
 // (with a flatter shape) must be used instead of stretching the narrow glyph.
@@ -55,11 +58,22 @@ const WIDE_TILDE: WideGlyph = {
     'M786 59C457 59 32 175.242 13 175.242c-6 0-10-3.457-11-10.37L.15 138c-1-7 3-12 10-13l19.2-6.4C378.4 40.7 634.3 0 804.3 0c337 0 411.8 157 746.8 157 328 0 754-112 773-112 5 0 10 3 11 9l1 14.075c1 8.066-.697 16.595-6.697 17.492l-21.052 7.31c-367.9 98.146-609.15 122.696-778.15 122.696 -338 0-409-156.573-744-156.573z',
 }
 
-function centerAccentBodies(shadow: ShadowRoot): void {
-  if (typeof (shadow as unknown as { querySelectorAll?: unknown }).querySelectorAll !== 'function') {
+function paintedTextCenter(element: HTMLElement): number | null {
+  if (!element.textContent) return null
+  const context = document.createElement('canvas').getContext('2d')
+  if (!context) return null
+  context.font = getComputedStyle(element).font
+  const metrics = context.measureText(element.textContent)
+  if (!metrics.actualBoundingBoxLeft && !metrics.actualBoundingBoxRight) return null
+  return element.getBoundingClientRect().left
+    + (metrics.actualBoundingBoxRight - metrics.actualBoundingBoxLeft) / 2
+}
+
+function centerAccentBodies(root: ParentNode): void {
+  if (typeof (root as unknown as { querySelectorAll?: unknown }).querySelectorAll !== 'function') {
     return
   }
-  const bodies = shadow.querySelectorAll('.ML__accent-body')
+  const bodies = root.querySelectorAll('.ML__accent-body')
   // Measure from the untransformed layout, then re-center each glyph.
   for (const node of bodies) {
     ;(node as HTMLElement).style.transform = ''
@@ -75,18 +89,22 @@ function centerAccentBodies(shadow: ShadowRoot): void {
     if (vlistRect.width < 1) {
       continue
     }
-    const vlistCenter = (vlistRect.left + vlistRect.right) / 2
+    let targetCenter = (vlistRect.left + vlistRect.right) / 2
     let visualCenter: number
     if (body.classList.contains('ML__accent-combining-char')) {
-      const fontSize = parseFloat(getComputedStyle(body).fontSize) || 0
-      visualCenter = bodyRect.left - COMBINING_ARROW_HALF_EM * fontSize
+      const style = getComputedStyle(body)
+      const fontSize = parseFloat(style.fontSize) || 0
+      visualCenter = paintedTextCenter(body) ?? bodyRect.left - COMBINING_ARROW_HALF_EM * fontSize
+      if (navigator.userAgent.includes('AppleWebKit') && !navigator.userAgent.includes('Chrome')) {
+        targetCenter -= WEBKIT_VEC_SKEW_EM * fontSize
+      }
     } else {
       if (bodyRect.width < 1) {
         continue
       }
       visualCenter = (bodyRect.left + bodyRect.right) / 2
     }
-    const correction = vlistCenter - visualCenter
+    const correction = targetCenter - visualCenter
     if (Math.abs(correction) < 0.5) {
       continue
     }
@@ -94,11 +112,11 @@ function centerAccentBodies(shadow: ShadowRoot): void {
   }
 }
 
-function stretchWideAccents(shadow: ShadowRoot): void {
-  if (typeof (shadow as unknown as { querySelectorAll?: unknown }).querySelectorAll !== 'function') {
+function stretchWideAccents(root: ParentNode): void {
+  if (typeof (root as unknown as { querySelectorAll?: unknown }).querySelectorAll !== 'function') {
     return
   }
-  for (const node of shadow.querySelectorAll('.ML__stretchy')) {
+  for (const node of root.querySelectorAll('.ML__stretchy')) {
     const stretchy = node as HTMLElement
     const vlist = stretchy.closest('.ML__vlist') as HTMLElement | null
     const center = stretchy.closest('.ML__center') as HTMLElement | null
@@ -137,15 +155,15 @@ function stretchWideAccents(shadow: ShadowRoot): void {
   }
 }
 
-function correct(shadow: ShadowRoot): void {
-  centerAccentBodies(shadow)
-  stretchWideAccents(shadow)
+export function correctAccentPositioning(root: ParentNode): void {
+  centerAccentBodies(root)
+  stretchWideAccents(root)
 }
 
 function schedule(shadow: ShadowRoot): void {
   // Correct synchronously (as a microtask after MathLive's DOM mutation, before
   // the next paint) so the accent never appears at its un-centered position.
-  correct(shadow)
+  correctAccentPositioning(shadow)
 }
 
 /**

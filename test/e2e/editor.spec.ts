@@ -16,6 +16,67 @@ async function insertElement(page: Page, label: string, category: string) {
   await page.getByRole('button', { name: `Insert ${label}`, exact: true }).click()
 }
 
+async function arrayShape(field: Locator, environment: string) {
+  return field.evaluate((element, name) => {
+    const atoms = (element as unknown as {
+      _mathfield?: { model?: { atoms: Array<{
+        type: string
+        environmentName?: string
+        rowCount?: number
+        colCount?: number
+      }> } }
+    })._mathfield?.model?.atoms
+    const array = atoms?.find((atom) => atom.type === 'array' && atom.environmentName === name)
+    return { rows: array?.rowCount, columns: array?.colCount }
+  }, environment)
+}
+
+async function arrayPlaceholderCount(field: Locator, environment: string) {
+  return field.evaluate((element, name) => {
+    type Atom = { type: string }
+    const array = (element as unknown as {
+      _mathfield?: { model?: { atoms: Array<{
+        type: string
+        environmentName?: string
+        rowCount: number
+        colCount: number
+        getCell(row: number, column: number): Atom[] | undefined
+      }> } }
+    })._mathfield?.model?.atoms.find(
+      (atom) => atom.type === 'array' && atom.environmentName === name,
+    )
+    let count = 0
+    for (let row = 0; row < (array?.rowCount ?? 0); row++) {
+      for (let column = 0; column < (array?.colCount ?? 0); column++) {
+        count += array?.getCell(row, column)?.filter((atom) => atom.type === 'placeholder').length ?? 0
+      }
+    }
+    return count
+  }, environment)
+}
+
+async function rightClickArrayCell(page: Page, field: Locator, branch: string) {
+  const point = await field.evaluate((element, expectedBranch) => {
+    const mf = element as unknown as {
+      lastOffset: number
+      getElementInfo(offset: number): {
+        bounds?: { left: number; top: number; width: number; height: number }
+      } | undefined
+      _mathfield?: { model?: { at(offset: number): { type: string; parentBranch?: unknown } } }
+    }
+    for (let offset = 0; offset <= mf.lastOffset; offset++) {
+      const atom = mf._mathfield?.model?.at(offset)
+      const bounds = mf.getElementInfo(offset)?.bounds
+      if (atom?.type === 'placeholder' && bounds && String(atom.parentBranch) === expectedBranch) {
+        return { x: bounds.left + bounds.width / 2, y: bounds.top + bounds.height / 2 }
+      }
+    }
+    return null
+  }, branch)
+  expect(point).not.toBeNull()
+  await page.mouse.click(point!.x, point!.y, { button: 'right' })
+}
+
 async function simCaretDistanceFromHint(caret: Locator, hint: Locator): Promise<number> {
   const [caretBox, hintBox] = await Promise.all([caret.boundingBox(), hint.boundingBox()])
   if (!caretBox || !hintBox) {
@@ -1274,6 +1335,110 @@ test('matrix menu keeps a right-clicked placeholder as its command target', asyn
   })).toBe(1)
 })
 
+test('aligned equations can add and remove rows from the context menu', async ({ page, goto }) => {
+  await goto('/', { waitUntil: 'hydration' })
+  await insertElement(page, 'Aligned equations', 'Matrices')
+  const field = page.locator('math-field.workspace-field')
+  const textarea = page.locator('.latex-textarea')
+
+  await rightClickArrayCell(page, field, '0,0')
+  await page.getByRole('menuitem', { name: /^Insert Row Below/ }).click()
+  await expect.poll(() => arrayShape(field, 'aligned')).toEqual({ rows: 3, columns: 2 })
+  await expect.poll(async () => {
+    const latex = await textarea.inputValue()
+    return latex.match(/&\s*=/g)?.length
+  }).toBe(3)
+  await expect.poll(() => arrayPlaceholderCount(field, 'aligned')).toBe(6)
+
+  await rightClickArrayCell(page, field, '1,0')
+  await page.getByRole('menuitem', { name: /^Delete Row/ }).click()
+  await expect.poll(() => arrayShape(field, 'aligned')).toEqual({ rows: 2, columns: 2 })
+})
+
+test('cases can add and remove placeholder rows and columns', async ({ page, goto }) => {
+  await goto('/', { waitUntil: 'hydration' })
+  await insertElement(page, 'Cases (piecewise)', 'Brackets')
+  const field = page.locator('math-field.workspace-field')
+
+  await rightClickArrayCell(page, field, '0,0')
+  await page.getByRole('menuitem', { name: /^Insert Row Below/ }).click()
+  await expect.poll(() => arrayShape(field, 'cases')).toEqual({ rows: 3, columns: 2 })
+  await expect.poll(() => arrayPlaceholderCount(field, 'cases')).toBe(6)
+
+  await rightClickArrayCell(page, field, '0,0')
+  await page.getByRole('menuitem', { name: /^Insert Column Right/ }).click()
+  await expect.poll(() => arrayShape(field, 'cases')).toEqual({ rows: 3, columns: 3 })
+  await expect.poll(() => arrayPlaceholderCount(field, 'cases')).toBe(9)
+
+  await rightClickArrayCell(page, field, '1,0')
+  await page.getByRole('menuitem', { name: /^Delete Row/ }).click()
+  await expect.poll(() => arrayShape(field, 'cases')).toEqual({ rows: 2, columns: 3 })
+
+  await rightClickArrayCell(page, field, '0,1')
+  await page.getByRole('menuitem', { name: /^Delete Column/ }).click()
+  await expect.poll(() => arrayShape(field, 'cases')).toEqual({ rows: 2, columns: 2 })
+})
+
+test('deleting nested accent and Text content stays in its containing branch', async ({ page, goto }) => {
+  await goto('/', { waitUntil: 'hydration' })
+  const textarea = page.locator('.latex-textarea')
+  const field = page.locator('math-field.workspace-field')
+  const focusAtom = (latex: string, before: boolean) => field.evaluate((element, target) => {
+    const mf = element as unknown as {
+      lastOffset: number
+      position: number
+      selection: { ranges: [number, number][] }
+      focus(): void
+      getElementInfo(offset: number): { latex?: string } | undefined
+    }
+    mf.focus()
+    for (let offset = 0; offset <= mf.lastOffset; offset++) {
+      if (mf.getElementInfo(offset)?.latex === target.latex) {
+        const position = offset - Number(target.before)
+        mf.selection = { ranges: [[position, position]] }
+        return true
+      }
+    }
+    return false
+  }, { latex, before })
+
+  await textarea.fill('\\begin{matrix}\\hat{hello}&\\placeholder{}\\end{matrix}')
+  await textarea.blur()
+  await page.waitForTimeout(150)
+  expect(await focusAtom('o', false)).toBe(true)
+  await expect(field).toBeFocused()
+  await page.keyboard.press('Backspace')
+  await expect(textarea).toHaveValue(/\\begin\{matrix\}\\hat\{hell\}\s*&\s*\\end\{matrix\}/)
+
+  await textarea.fill('\\frac{\\bar{hello}}{\\placeholder{}}')
+  await textarea.blur()
+  await page.waitForTimeout(150)
+  expect(await focusAtom('o', false)).toBe(true)
+  await expect(field).toBeFocused()
+  await page.keyboard.press('Backspace')
+  await expect(textarea).toHaveValue(/\\frac\{\\bar\{hell\}\}\{(?:\\placeholder\{\})?\}/)
+
+  await textarea.fill('\\begin{matrix}\\hat{x}&\\placeholder{}\\end{matrix}')
+  await textarea.blur()
+  await page.waitForTimeout(150)
+  expect(await focusAtom('\\hat{x}', true)).toBe(true)
+  await expect(field).toBeFocused()
+  await page.keyboard.press('Backspace')
+  await expect(textarea).toHaveValue(/\\begin\{matrix\}\\hat\{\}\s*&\s*\\end\{matrix\}/)
+  await page.keyboard.type('z')
+  await expect(textarea).toHaveValue(/\\begin\{matrix\}\\hat\{z\}\s*&\s*\\end\{matrix\}/)
+
+  await textarea.fill('\\begin{matrix}\\text{x}&\\placeholder{}\\end{matrix}')
+  await textarea.blur()
+  await page.waitForTimeout(150)
+  expect(await focusAtom('\\text{x}', true)).toBe(true)
+  await expect(field).toBeFocused()
+  await page.keyboard.press('Delete')
+  await expect(textarea).toHaveValue(/\\begin\{matrix\}\\text\{\}\s*&\s*\\end\{matrix\}/)
+  await page.keyboard.press('Delete')
+  await expect(textarea).toHaveValue(/\\begin\{matrix\}\s*&\s*\\end\{matrix\}/)
+})
+
 test('native context menu unwraps the innermost pointed element', async ({ page, goto }) => {
   await goto('/', { waitUntil: 'hydration' })
   const textarea = page.locator('.latex-textarea')
@@ -1864,6 +2029,44 @@ test('palette ellipsis icon renders the symbol without errors', async ({ page, g
   const chip = page.getByRole('button', { name: 'Insert Ellipsis' })
   await expect(chip).toContainText('…', { timeout: 15000 })
   await expect(chip.locator('.ML__error')).toHaveCount(0)
+})
+
+test('vector alignment matches in the palette, drag preview, and field', async ({ page, goto }) => {
+  await goto('/', { waitUntil: 'hydration' })
+  await expandCategory(page, 'Accents')
+  const button = page.getByRole('button', { name: 'Insert Vector arrow' })
+  const shiftPx = (locator: Locator) => locator.evaluate((node) => {
+    const match = (node as HTMLElement).style.transform.match(/translateX\(([-\d.]+)px\)/)
+    return match ? Number(match[1]) : 0
+  })
+
+  const paletteArrow = button.locator('.ML__accent-combining-char')
+  await expect(paletteArrow).toHaveCount(1)
+  await expect.poll(async () => Math.abs(await shiftPx(paletteArrow))).toBeLessThan(2)
+
+  const workspace = page.locator('.workspace')
+  const box = await workspace.boundingBox()
+  await button.evaluate((node) => node.dispatchEvent(new DragEvent('dragstart', {
+    bubbles: true,
+    cancelable: true,
+    dataTransfer: new DataTransfer(),
+  })))
+  await workspace.evaluate((node, point) => node.dispatchEvent(new DragEvent('dragover', {
+    bubbles: true,
+    cancelable: true,
+    clientX: point.x,
+    clientY: point.y,
+    dataTransfer: new DataTransfer(),
+  })), { x: box!.x + box!.width / 2, y: box!.y + box!.height / 2 })
+  const previewArrow = page.locator('.insertion-preview .ML__accent-combining-char')
+  await expect(previewArrow).toHaveCount(1)
+  expect(Math.abs(await shiftPx(previewArrow))).toBeLessThan(2)
+  await button.evaluate((node) => node.dispatchEvent(new DragEvent('dragend', { bubbles: true })))
+
+  await button.click()
+  const fieldArrow = page.locator('math-field.workspace-field').locator('.ML__accent-combining-char')
+  await expect(fieldArrow).toHaveCount(1)
+  expect(Math.abs(await shiftPx(fieldArrow))).toBeLessThan(2)
 })
 
 test('fixed-width accents stay centered over multi-character content', async ({ page, goto }) => {

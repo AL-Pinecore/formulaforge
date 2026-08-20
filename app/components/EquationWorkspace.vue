@@ -1090,6 +1090,7 @@ async function ensureMirrorField(): Promise<MathfieldElement | null> {
   mirror.style.setProperty('--contains-highlight-background-color', 'transparent')
   mirror.style.fontSize = `${props.fontSize}px`
   document.body.appendChild(mirror)
+  ensureAccentPositioning(mirror)
   mirrorField = mirror
   return mirror
 }
@@ -1789,7 +1790,9 @@ function isMatrix(atom: InternalAtom | undefined): atom is InternalMatrix {
   return Boolean(
     atom?.type === 'array' &&
       typeof (atom as InternalMatrix).environmentName === 'string' &&
-      /matrix\*?$/.test((atom as InternalMatrix).environmentName),
+      (/matrix\*?$/.test((atom as InternalMatrix).environmentName) ||
+        /^[dr]?cases$/.test((atom as InternalMatrix).environmentName) ||
+        (atom as InternalMatrix).environmentName === 'aligned'),
   )
 }
 
@@ -1939,7 +1942,23 @@ function matrixOffsetAtPoint(
 
 function executeMatrixCommands(mf: MathfieldElement, commands: readonly MatrixMenuCommand[]) {
   mf.focus()
-  for (const command of commands) mf.executeCommand(command)
+  for (const command of commands) {
+    mf.executeCommand(command)
+    if (command !== 'addRowBefore' && command !== 'addRowAfter') continue
+    const context = matrixContextAtCaret(mf)
+    const model = internalModel(mf)
+    const right = context?.matrix.getCell(context.row, 1)?.[0]
+    if (context?.matrix.environmentName !== 'aligned' || !model || !right) continue
+    mf.position = model.offsetOf(right)
+    mf.insert('=\\placeholder{}', {
+      mode: 'math',
+      format: 'latex',
+      selectionMode: 'after',
+      silenceNotifications: true,
+    })
+    const left = context.matrix.getCell(context.row, 0)?.[0]
+    if (left) mf.position = model.offsetOf(left)
+  }
   restoreEmptyGroups(mf)
   publishState(mf)
   scheduleUpdateTextHints()
@@ -2040,7 +2059,13 @@ function configureContextMenu(mf: MathfieldElement) {
   mf.menuItems = [
     ...(mf.menuItems ?? []).map((item) => {
       const command = 'id' in item && item.id ? MATRIX_MENU_COMMANDS[item.id] : undefined
-      return command ? { ...item, onMenuSelect: () => executeContextMatrixCommand(command) } : item
+      if (!command) return item
+      const rowCommand = command === 'addRowBefore' || command === 'addRowAfter' || command === 'removeRow'
+      return {
+        ...item,
+        ...(rowCommand ? { visible: () => matrixContextAtCaret(mf) !== null } : {}),
+        onMenuSelect: () => executeContextMatrixCommand(command),
+      }
     }),
     { type: 'divider' },
     {
@@ -2483,6 +2508,52 @@ function handleKeydown(event: KeyboardEvent) {
     const replacement = content
       ? `\\${accentTarget.command}{${content}}`
       : `\\${accentTarget.command}{\\placeholder{}}`
+    {
+      // Replacing a nested branch selection can make MathLive move the rebuilt
+      // accent into another placeholder of its parent. Replace it in the
+      // complete formula instead, then restore the caret inside the accent.
+      const originalAccent = mf.getElementInfo(accentTarget.constructOffset)?.latex
+      if (originalAccent) {
+        const deletedIndex = target - accentTarget.start
+        let occurrence = 0
+        for (let offset = 0; offset < accentTarget.constructOffset; offset++) {
+          if (mf.getElementInfo(offset)?.latex === originalAccent) occurrence++
+        }
+        let stringIndex = -1
+        for (let i = 0; i <= occurrence; i++) {
+          stringIndex = mf.value.indexOf(originalAccent, stringIndex + 1)
+        }
+        if (stringIndex >= 0) {
+          const next =
+            mf.value.slice(0, stringIndex) +
+            replacement +
+            mf.value.slice(stringIndex + originalAccent.length)
+          const replacementOccurrence = next.slice(0, stringIndex).split(replacement).length - 1
+          mf.setValue(next, { mode: 'math', silenceNotifications: true })
+          let seen = 0
+          for (let offset = 0; offset <= mf.lastOffset; offset++) {
+            if (mf.getElementInfo(offset)?.latex !== replacement) continue
+            if (seen++ !== replacementOccurrence) continue
+            const rebuiltAccent = accentGroupAtOffset(mf, offset)
+            if (rebuiltAccent) {
+              if (content) {
+                mf.position = Math.max(
+                  rebuiltAccent.start - 1,
+                  Math.min(rebuiltAccent.end, rebuiltAccent.start + deletedIndex - 1),
+                )
+              } else {
+                mf.selection = { ranges: [[rebuiltAccent.start - 1, rebuiltAccent.start]] }
+              }
+            }
+            break
+          }
+          publishState(mf)
+          onSelectionChange()
+          scheduleUpdateTextHints()
+          return
+        }
+      }
+    }
     mf.selection = {
       ranges: [[accentTarget.start - 1, accentTarget.constructOffset]],
     }
@@ -2494,8 +2565,6 @@ function handleKeydown(event: KeyboardEvent) {
     })
     if (content) {
       mf.position = Math.min(Math.max(0, target - 1), mf.lastOffset)
-    } else {
-      enterPlaceholder(mf, Math.min(accentTarget.start, mf.lastOffset))
     }
     publishState(mf)
     onSelectionChange()
@@ -2518,12 +2587,43 @@ function handleKeydown(event: KeyboardEvent) {
     const group = emptyBox ?? targetGroup!
     event.preventDefault()
     event.stopPropagation()
-    const prefix = mf.getValue(0, Math.max(0, group.start - 2))
-    const suffix = mf.getValue(group.end + 1, mf.lastOffset)
-    const caretPublicLength = normalizePublicLatex(prefix).length
-    mf.setValue(prefix + suffix, { mode: 'math', silenceNotifications: true })
+    // Partial getValue() ranges inside matrix branches serialize as empty;
+    // remove the Text box from the complete formula so its matrix survives.
+    const wrapped = `${TEXT_BOUNDARY_LATEX}${group.latex}${TEXT_BOUNDARY_LATEX}`
+    let occurrence = 0
+    for (let offset = 0; offset < group.first; offset++) {
+      const earlier = textGroupFromAtom(mf, offset)
+      if (earlier?.first === offset && earlier.latex === group.latex) occurrence++
+    }
+    let stringIndex = -1
+    for (let i = 0; i <= occurrence; i++) {
+      stringIndex = mf.value.indexOf(wrapped, stringIndex + 1)
+    }
+    if (stringIndex < 0) return
+    const matrixContext = matrixContextAtCaret(mf)
+    const matrices = internalModel(mf)?.atoms?.filter(isMatrix) ?? []
+    const matrixIndex = matrixContext ? matrices.indexOf(matrixContext.matrix) : -1
+    const caretPublicLength = normalizePublicLatex(mf.value.slice(0, stringIndex)).length
+    const withoutText = normalizePublicLatex(
+      mf.value.slice(0, stringIndex) + mf.value.slice(stringIndex + wrapped.length),
+    )
+    const restored = restoreEmptyGroupLatex(withoutText) ?? withoutText
+    mf.setValue(addTextBoundaries(restored), { mode: 'math', silenceNotifications: true })
     ensureMathMode(mf)
-    mf.position = publicStringOffsetToModel(mf, caretPublicLength)
+    const model = internalModel(mf)
+    const matrix = matrixIndex >= 0 ? model?.atoms?.filter(isMatrix)[matrixIndex] : null
+    const placeholder =
+      matrixContext && matrix
+        ? matrix
+            .getCell(matrixContext.row, matrixContext.column)
+            ?.find((atom) => atom.type === 'placeholder')
+        : null
+    if (model && placeholder) {
+      const offset = model.offsetOf(placeholder)
+      mf.selection = { ranges: [[offset - 1, offset]] }
+    } else {
+      mf.position = publicStringOffsetToModel(mf, caretPublicLength)
+    }
     publishState(mf)
     syncCaretInText()
     scheduleUpdateTextHints()
