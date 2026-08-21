@@ -6,6 +6,7 @@ Each doc focuses on the implementation mechanics of one feature (files involved,
 
 | Doc | Covers |
 |------|------|
+| [Architecture: EquationDocument & EditorAdaptor](architecture.en.md) | the two stable boundaries: document owns data, adaptor isolates the backend, centralized workarounds |
 | [Editor & Drag-and-Drop Insertion](editor.en.md) | `<math-field>` init, state singleton, drag insert, mirror preview, offset computation |
 | [Text Box Editing](text-box.en.md) | zero-width boundary markers, empty-box sentinel, whole-group rebuild, font-style drag |
 | [Edit Semantics](edit-semantics.en.md) | empty-group placeholder restoration, accent centering, Backspace structural unwrap |

@@ -1,4 +1,4 @@
-import type { MathfieldElement } from 'mathlive'
+import type { EditorAdaptor } from './EditorAdaptor'
 import { normalizePublicLatex, publicStringOffsetToModel } from './EditorLatex'
 
 export interface MatrixCell {
@@ -128,7 +128,7 @@ export function matrixContextFromLatex(source: string, caretOffset: number): Mat
   return null
 }
 
-export function matrixContextAtCaret(mf: MathfieldElement): MatrixContext | null {
+export function matrixContextAtCaret(mf: EditorAdaptor): MatrixContext | null {
   const original = mf.value
   const position = mf.position
   const selection = mf.selection
@@ -163,7 +163,7 @@ export function matrixContextAtCaret(mf: MathfieldElement): MatrixContext | null
 }
 
 export function matrixOffsetAtPoint(
-  mf: MathfieldElement,
+  mf: EditorAdaptor,
   x: number,
   y: number,
   padding: number,
@@ -185,12 +185,12 @@ export function matrixOffsetAtPoint(
   return nearest?.offset ?? null
 }
 
-function matrixCell(mf: MathfieldElement, matrixIndex: number, row: number, column: number): MatrixCell | null {
+function matrixCell(mf: EditorAdaptor, matrixIndex: number, row: number, column: number): MatrixCell | null {
   return matrixStructures(mf.value)[matrixIndex]?.cells[row]?.[column] ?? null
 }
 
 export function moveToMatrixCell(
-  mf: MathfieldElement,
+  mf: EditorAdaptor,
   matrixIndex: number,
   row: number,
   column: number,
@@ -202,7 +202,7 @@ export function moveToMatrixCell(
 }
 
 export function selectMatrixCellPlaceholder(
-  mf: MathfieldElement,
+  mf: EditorAdaptor,
   matrixIndex: number,
   row: number,
   column: number,

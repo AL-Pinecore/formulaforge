@@ -1,4 +1,4 @@
-import type { MathfieldElement } from 'mathlive'
+import type { EditorAdaptor } from './EditorAdaptor'
 import type { MatrixCommand } from '~/utils/matrix'
 import { unwrapCommandLatex } from '~/utils/unwrap-element'
 import {
@@ -27,8 +27,8 @@ type UnwrapTarget = {
 
 type ContextMenuOptions = {
   unwrapLabel: () => string
-  restoreEmptyGroups: (mf: MathfieldElement) => void
-  publishState: (mf: MathfieldElement) => void
+  restoreEmptyGroups: (mf: EditorAdaptor) => void
+  publishState: (mf: EditorAdaptor) => void
   updateTextHints: () => void
   selectionChanged: () => void
 }
@@ -39,7 +39,7 @@ export class ContextMenuController {
 
   constructor(private readonly options: ContextMenuOptions) {}
 
-  configure(mf: MathfieldElement): void {
+  configure(mf: EditorAdaptor): void {
     mf.menuItems = [
       ...(mf.menuItems ?? []).map((item) => {
         const command = 'id' in item && item.id ? MATRIX_MENU_COMMANDS[item.id] : undefined
@@ -62,7 +62,7 @@ export class ContextMenuController {
     ]
   }
 
-  handlePointerDown(mf: MathfieldElement, event: PointerEvent): boolean {
+  handlePointerDown(mf: EditorAdaptor, event: PointerEvent): boolean {
     if (
       event.composedPath().some(
         (node) => node instanceof HTMLElement && node.getAttribute('role') === 'menuitem',
@@ -78,7 +78,7 @@ export class ContextMenuController {
     return true
   }
 
-  onContextMenu(mf: MathfieldElement, event: MouseEvent, matrixPadding: number): void {
+  onContextMenu(mf: EditorAdaptor, event: MouseEvent, matrixPadding: number): void {
     const unwrap = this.unwrapTarget ?? this.unwrapTargetAtPoint(mf, event.clientX, event.clientY)
     const offset = matrixOffsetAtPoint(mf, event.clientX, event.clientY, matrixPadding)
       ?? mf.getOffsetFromPoint(event.clientX, event.clientY)
@@ -101,7 +101,7 @@ export class ContextMenuController {
   }
 
   executeMatrixCommands(
-    mf: MathfieldElement,
+    mf: EditorAdaptor,
     commands: readonly ContextMatrixCommand[],
   ): void {
     mf.focus()
@@ -125,7 +125,7 @@ export class ContextMenuController {
   }
 
   private executeContextMatrixCommand(
-    mf: MathfieldElement,
+    mf: EditorAdaptor,
     command: ContextMatrixCommand,
   ): void {
     const target = this.matrixTarget
@@ -135,7 +135,7 @@ export class ContextMenuController {
     this.executeMatrixCommands(mf, [command])
   }
 
-  private unwrapContextTarget(mf: MathfieldElement): void {
+  private unwrapContextTarget(mf: EditorAdaptor): void {
     const target = this.unwrapTarget
     if (!target) return
     const publicCaretOffset = normalizePublicLatex(target.latex.slice(0, target.caretOffset)).length
@@ -147,7 +147,7 @@ export class ContextMenuController {
   }
 
   private elementRange(
-    mf: MathfieldElement,
+    mf: EditorAdaptor,
     end: number,
     latex: string,
   ): [number, number] | null {
@@ -158,7 +158,7 @@ export class ContextMenuController {
   }
 
   private unwrapTargetAtPoint(
-    mf: MathfieldElement,
+    mf: EditorAdaptor,
     x: number,
     y: number,
   ): UnwrapTarget | null {
@@ -180,7 +180,7 @@ export class ContextMenuController {
     return best?.target ?? this.unwrapTargetAtOffset(mf, mf.getOffsetFromPoint(x, y))
   }
 
-  private unwrapTargetAtOffset(mf: MathfieldElement, end: number): UnwrapTarget | null {
+  private unwrapTargetAtOffset(mf: EditorAdaptor, end: number): UnwrapTarget | null {
     const latex = mf.getElementInfo(end)?.latex
     if (!latex) return null
     const replacement = unwrapCommandLatex(latex)

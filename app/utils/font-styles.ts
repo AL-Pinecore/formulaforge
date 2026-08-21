@@ -1,10 +1,10 @@
-import type { Style } from 'mathlive'
+import type { EditorFontStyle } from '~/editor/EditorAdaptor'
 
-// Maps the font-style palette elements to a MathLive `Style` object so that
+// Maps the font-style palette elements to a backend font style so that
 // dragging one of them onto an existing `\text{...}` box restyles its content
 // instead of inserting a new placeholder. Only the styles with a text-mode
 // equivalent are included; calligraphic/blackboard/fraktur are math-only.
-export const FONT_STYLES: Record<string, Style> = {
+export const FONT_STYLES: Record<string, EditorFontStyle> = {
   mathrm: { fontFamily: 'roman' },
   mathbf: { fontSeries: 'b' },
   mathit: { fontShape: 'it' },

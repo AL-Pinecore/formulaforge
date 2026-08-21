@@ -1,4 +1,4 @@
-import type { MathfieldElement } from 'mathlive'
+import type { EditorAdaptor } from './EditorAdaptor'
 import { FONT_STYLES, FONT_STYLE_TEXT_COMMANDS } from '~/utils/font-styles'
 import { restoreEmptyGroupLatex } from '~/utils/empty-group'
 import {
@@ -10,7 +10,6 @@ import {
   textHintFont,
   textHintText,
 } from '~/utils/text-boundary'
-import { ensureMathMode } from './MathLiveAdapter'
 import { matrixContextAtCaret, selectMatrixCellPlaceholder } from './MatrixController'
 import { normalizePublicLatex, publicStringOffsetToModel } from './EditorLatex'
 
@@ -42,23 +41,23 @@ export interface TextHint extends VisualBox {
 
 export type TextKeyResult = 'continue' | 'handled' | 'changed'
 
-export function isTextAtom(mf: MathfieldElement, offset: number): boolean {
+export function isTextAtom(mf: EditorAdaptor, offset: number): boolean {
   const latex = mf.getElementInfo(offset)?.latex
   return latex === TEXT_BOUNDARY_LATEX ? false : isTextCommandLatex(latex)
 }
 
-function isTextBoundaryAtom(mf: MathfieldElement, offset: number): boolean {
+function isTextBoundaryAtom(mf: EditorAdaptor, offset: number): boolean {
   return mf.getElementInfo(offset)?.latex === TEXT_BOUNDARY_LATEX
 }
 
-function isManagedBoundaryAtom(mf: MathfieldElement, offset: number): boolean {
+function isManagedBoundaryAtom(mf: EditorAdaptor, offset: number): boolean {
   return isTextBoundaryAtom(mf, offset) && (
     isTextAtom(mf, offset - 1) || isTextAtom(mf, offset + 1)
   )
 }
 
 export function relocateCaretAcrossBoundaries(
-  mf: MathfieldElement,
+  mf: EditorAdaptor,
   key: 'Backspace' | 'Delete',
 ): number {
   let position = mf.position
@@ -77,7 +76,7 @@ export function relocateCaretAcrossBoundaries(
   return position
 }
 
-function textAtomRunKey(mf: MathfieldElement, offset: number): string {
+function textAtomRunKey(mf: EditorAdaptor, offset: number): string {
   const info = mf.getElementInfo(offset)
   return JSON.stringify([info?.mode, info?.style ?? null])
 }
@@ -92,7 +91,7 @@ function decodeTextAtom(latex: string): string {
     .replace(/\\([\\{}#$&^_~%])/g, '$1')
 }
 
-export function textGroupFromAtom(mf: MathfieldElement, atom: number): TextGroup | null {
+export function textGroupFromAtom(mf: EditorAdaptor, atom: number): TextGroup | null {
   if (!isTextAtom(mf, atom)) return null
   const runKey = textAtomRunKey(mf, atom)
   let first = atom
@@ -140,7 +139,7 @@ export function textGroupFromAtom(mf: MathfieldElement, atom: number): TextGroup
   }
 }
 
-export function textGroupAtCaret(mf: MathfieldElement): TextGroup | null {
+export function textGroupAtCaret(mf: EditorAdaptor): TextGroup | null {
   const position = mf.position
   if (isTextAtom(mf, position + 1)) {
     const group = textGroupFromAtom(mf, position + 1)
@@ -155,7 +154,7 @@ export function textGroupAtCaret(mf: MathfieldElement): TextGroup | null {
 }
 
 export function textGroupAtPoint(
-  mf: MathfieldElement,
+  mf: EditorAdaptor,
   x: number,
   y: number,
 ): TextGroup | null {
@@ -175,7 +174,7 @@ export function textGroupAtPoint(
 }
 
 export function emptyTextGroupAtPoint(
-  mf: MathfieldElement,
+  mf: EditorAdaptor,
   x: number,
   y: number,
 ): TextGroup | null {
@@ -199,7 +198,7 @@ export function emptyTextGroupAtPoint(
 }
 
 export function textGroupRangeAtPoint(
-  mf: MathfieldElement,
+  mf: EditorAdaptor,
   x: number,
   y: number,
 ): [number, number] | null {
@@ -231,7 +230,7 @@ export function textGroupRangeAtPoint(
 }
 
 export function applyFontStyle(
-  mf: MathfieldElement,
+  mf: EditorAdaptor,
   id: string,
   x: number,
   y: number,
@@ -247,7 +246,7 @@ export function applyFontStyle(
 }
 
 export function clampOffsetOutsideText(
-  mf: MathfieldElement,
+  mf: EditorAdaptor,
   offset: number,
   x?: number,
 ): number {
@@ -266,7 +265,7 @@ export function clampOffsetOutsideText(
 }
 
 export function textGroupNearPosition(
-  mf: MathfieldElement,
+  mf: EditorAdaptor,
   position: number,
 ): TextGroup | null {
   for (let offset = 0; offset <= mf.lastOffset; offset++) {
@@ -280,7 +279,7 @@ export function textGroupNearPosition(
 }
 
 export function emptyTextHintBox(
-  mf: MathfieldElement,
+  mf: EditorAdaptor,
   group: TextGroup,
 ): VisualBox | null {
   const leftMarker = mf.getElementInfo(group.start - 1)?.bounds
@@ -294,7 +293,7 @@ export function emptyTextHintBox(
   }
 }
 
-export function collectTextHints(mf: MathfieldElement): TextHint[] {
+export function collectTextHints(mf: EditorAdaptor): TextHint[] {
   const hints: TextHint[] = []
   if (typeof mf.getElementInfo !== 'function') return hints
   const seen = new Set<number>()
@@ -311,7 +310,7 @@ export function collectTextHints(mf: MathfieldElement): TextHint[] {
   return hints
 }
 
-function emptyTextGroupAtCaret(mf: MathfieldElement): TextGroup | null {
+function emptyTextGroupAtCaret(mf: EditorAdaptor): TextGroup | null {
   if (!mf.selectionIsCollapsed) return null
   const group = textGroupAtCaret(mf)
   return group &&
@@ -322,7 +321,7 @@ function emptyTextGroupAtCaret(mf: MathfieldElement): TextGroup | null {
     : null
 }
 
-export function snapCaretIntoEmptyText(mf: MathfieldElement): boolean {
+export function snapCaretIntoEmptyText(mf: EditorAdaptor): boolean {
   for (let offset = 0; offset <= mf.lastOffset; offset++) {
     if (!isTextAtom(mf, offset)) continue
     const group = textGroupFromAtom(mf, offset)
@@ -333,7 +332,7 @@ export function snapCaretIntoEmptyText(mf: MathfieldElement): boolean {
   return false
 }
 
-function normalizeTextModel(mf: MathfieldElement): void {
+function normalizeTextModel(mf: EditorAdaptor): void {
   const fixed = addTextBoundaries(normalizePublicLatex(mf.value))
   if (fixed !== mf.value) {
     mf.setValue(fixed, { mode: 'math', silenceNotifications: true })
@@ -341,7 +340,7 @@ function normalizeTextModel(mf: MathfieldElement): void {
 }
 
 function placeCaretInTextGroup(
-  mf: MathfieldElement,
+  mf: EditorAdaptor,
   groupLatex: string,
   charIndex: number,
 ): void {
@@ -365,7 +364,7 @@ function placeCaretInTextGroup(
   if (group) mf.position = Math.min(group.first + fallback.index + charIndex, mf.lastOffset)
 }
 
-function insertMathChar(mf: MathfieldElement, event: KeyboardEvent): void {
+function insertMathChar(mf: EditorAdaptor, event: KeyboardEvent): void {
   event.preventDefault()
   event.stopPropagation()
   const latex = event.key === '{' ? '\\lbrace' : event.key === '}' ? '\\rbrace' : event.key
@@ -377,12 +376,12 @@ function insertMathChar(mf: MathfieldElement, event: KeyboardEvent): void {
   })
 }
 
-function isCaretBeforeTextBox(mf: MathfieldElement): boolean {
+function isCaretBeforeTextBox(mf: EditorAdaptor): boolean {
   return isTextBoundaryAtom(mf, mf.position + 1) && isTextAtom(mf, mf.position + 2)
 }
 
 export function handleTextInput(
-  mf: MathfieldElement,
+  mf: EditorAdaptor,
   event: KeyboardEvent,
   arrivedByNavigation: boolean,
   direction: 'left' | 'right' | null,
@@ -411,7 +410,7 @@ export function handleTextInput(
   const arrowedOut =
     arrivedByNavigation &&
     mf.selectionIsCollapsed &&
-    !mf.classList.contains('caret-in-text') &&
+    !mf.element.classList.contains('caret-in-text') &&
     ((direction === 'right' && mf.position >= group.end) ||
       (direction === 'left' && mf.position <= group.start))
 
@@ -469,7 +468,7 @@ export function handleTextInput(
 }
 
 export function handleEmptyTextNavigation(
-  mf: MathfieldElement,
+  mf: EditorAdaptor,
   event: KeyboardEvent,
 ): TextKeyResult {
   if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return 'continue'
@@ -483,7 +482,7 @@ export function handleEmptyTextNavigation(
 }
 
 export function handleTextDeletion(
-  mf: MathfieldElement,
+  mf: EditorAdaptor,
   event: KeyboardEvent,
   target: number,
 ): TextKeyResult {
@@ -514,7 +513,7 @@ export function handleTextDeletion(
     )
     const restored = restoreEmptyGroupLatex(withoutText) ?? withoutText
     mf.setValue(addTextBoundaries(restored), { mode: 'math', silenceNotifications: true })
-    ensureMathMode(mf)
+    mf.ensureMathMode()
     const placeholderSelected = matrixContext && selectMatrixCellPlaceholder(
       mf,
       matrixContext.matrix.index,

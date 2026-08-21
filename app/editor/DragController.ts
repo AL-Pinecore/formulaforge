@@ -1,16 +1,9 @@
-import type { MathfieldElement } from 'mathlive'
+import type { EditorAdaptor } from './EditorAdaptor'
 import type { EquationElement } from '~/types/equation'
 import { getElementById } from '~/data/equation-elements'
 import { DRAG_ELEMENT_MIME, draggedElementId } from '~/utils/drag-payload'
 import { FONT_STYLES, isFontStyleElement } from '~/utils/font-styles'
-import { ensureAccentPositioning } from '~/utils/mathfield-accent'
-import { ensurePlaceholderSupport } from '~/utils/mathfield-placeholder'
 import { addTextBoundaries, withEmptyTextSentinel } from '~/utils/text-boundary'
-import {
-  offsetFromPoint,
-  placeholderIndexAtPoint,
-  selectPlaceholderAtPoint,
-} from './SelectionController'
 import { collectTextHints, textGroupRangeAtPoint, type TextHint } from './TextController'
 
 const PREVIEW_GREY = '#9ca3af'
@@ -23,7 +16,7 @@ export interface DragPreviewBox {
 }
 
 interface DragControllerOptions {
-  getMathfield: () => MathfieldElement | null
+  getAdaptor: () => EditorAdaptor | null
   getContainer: () => HTMLElement | null
   setDragging: (value: boolean) => void
   setPreview: (
@@ -43,7 +36,7 @@ interface DragControllerOptions {
 }
 
 export class DragController {
-  private mirror: MathfieldElement | null = null
+  private mirror: EditorAdaptor | null = null
   private disposed = false
   private dragging = false
   private previewRaf = 0
@@ -116,19 +109,19 @@ export class DragController {
 
   setFontSize(px: number): void {
     this.fontSize = px
-    if (this.mirror) this.mirror.style.fontSize = `${px}px`
+    this.mirror?.setFontSize(px)
   }
 
   setDisplayStyle(value: boolean): void {
     this.displayStyle = value
-    if (this.mirror) this.mirror.defaultMode = value ? 'math' : 'inline-math'
+    this.mirror?.setDisplayStyle(value)
   }
 
   dispose(): void {
     this.disposed = true
     this.setDragging(false)
     this.hidePreview()
-    this.mirror?.remove()
+    this.mirror?.element.remove()
     this.mirror = null
   }
 
@@ -149,50 +142,32 @@ export class DragController {
     this.options.setDragging(value)
   }
 
-  private async ensureMirror(): Promise<MathfieldElement | null> {
+  private async ensureMirror(): Promise<EditorAdaptor | null> {
     if (this.mirror) return this.mirror
-    try {
-      await customElements.whenDefined('math-field')
-    } catch {
+    const adaptor = this.options.getAdaptor()
+    if (!adaptor) return null
+    const mirror = await adaptor.createMirror({
+      fontSize: this.fontSize,
+      displayStyle: this.displayStyle,
+    })
+    if (this.disposed) {
+      mirror?.element.remove()
       return null
     }
-    if (this.disposed) return null
-    const mirror = document.createElement('math-field') as MathfieldElement
-    mirror.setAttribute('tabindex', '-1')
-    mirror.setAttribute('aria-hidden', 'true')
-    mirror.classList.add('workspace-mirror')
-    mirror.readOnly = true
-    mirror.mathVirtualKeyboardPolicy = 'manual'
-    mirror.defaultMode = this.displayStyle ? 'math' : 'inline-math'
-    Object.assign(mirror.style, {
-      position: 'fixed',
-      left: '-10000px',
-      top: '0',
-      visibility: 'hidden',
-      pointerEvents: 'none',
-      background: 'transparent',
-      color: 'var(--text)',
-      zIndex: '50',
-      fontSize: `${this.fontSize}px`,
-    })
-    mirror.style.setProperty('--selection-background-color', 'transparent')
-    mirror.style.setProperty('--contains-highlight-background-color', 'transparent')
-    document.body.appendChild(mirror)
-    ensureAccentPositioning(mirror)
     this.mirror = mirror
     return mirror
   }
 
   private updatePreview(event: DragEvent): void {
     const element = draggedElementId.value ? getElementById(draggedElementId.value) : undefined
-    const mf = this.options.getMathfield()
+    const mf = this.options.getAdaptor()
     if (!element || !mf) {
       this.hidePreview()
       return
     }
-    let offset = offsetFromPoint(mf, event.clientX, event.clientY)
+    let offset = mf.offsetFromPoint(event.clientX, event.clientY)
     if (!Number.isInteger(offset) || offset < 0) {
-      const rect = mf.getBoundingClientRect()
+      const rect = mf.element.getBoundingClientRect()
       const inside =
         event.clientX >= rect.left &&
         event.clientX <= rect.right &&
@@ -201,7 +176,7 @@ export class DragController {
       offset = inside ? mf.lastOffset : -1
     }
     this.offset = offset
-    this.placeholderIndex = placeholderIndexAtPoint(mf, event.clientX, event.clientY)
+    this.placeholderIndex = mf.placeholderIndexAtPoint(event.clientX, event.clientY)
     this.applyFont =
       isFontStyleElement(element.id) &&
       textGroupRangeAtPoint(mf, event.clientX, event.clientY) !== null
@@ -222,12 +197,11 @@ export class DragController {
   }
 
   private renderPreview(element: EquationElement): void {
-    const mf = this.options.getMathfield()
+    const mf = this.options.getAdaptor()
     const mirror = this.mirror
     if (!mf || !mirror) return
-    ensurePlaceholderSupport(mirror)
-    const rect = mf.getBoundingClientRect()
-    Object.assign(mirror.style, {
+    const rect = mf.element.getBoundingClientRect()
+    Object.assign(mirror.element.style, {
       left: `${rect.left}px`,
       top: `${rect.top}px`,
       width: `${rect.width}px`,
@@ -243,7 +217,7 @@ export class DragController {
     }
     let positioned = false
     if (this.placeholderIndex >= 0) {
-      positioned = selectPlaceholderAtPoint(mirror, this.x, this.y)
+      positioned = mirror.selectPlaceholderAtPoint(this.x, this.y)
     }
     if (!positioned) mirror.position = this.offset >= 0 ? this.offset : mf.position
     const latex = withEmptyTextSentinel(element.latex)
@@ -260,7 +234,7 @@ export class DragController {
     this.scheduleSnapshot(mirror)
   }
 
-  private scheduleSnapshot(mirror: MathfieldElement): void {
+  private scheduleSnapshot(mirror: EditorAdaptor): void {
     const run = () => {
       if (this.dragging && !this.disposed) this.snapshot(mirror)
     }
@@ -270,18 +244,17 @@ export class DragController {
     this.snapshotTimer = setTimeout(run, 32)
   }
 
-  private snapshot(mirror: MathfieldElement): void {
-    const latex = mirror.shadowRoot?.querySelector('.ML__latex') as HTMLElement | null
-    if (!latex) {
+  private snapshot(mirror: EditorAdaptor): void {
+    const preview = mirror.readPreviewHtml()
+    if (!preview) {
       this.options.setPreview(null, null, [])
       return
     }
-    const mf = this.options.getMathfield()
-    if (mf) mf.style.visibility = 'hidden'
-    const box = latex.getBoundingClientRect()
+    const mf = this.options.getAdaptor()
+    if (mf) mf.element.style.visibility = 'hidden'
     this.options.setPreview(
-      `<span class="ML__container">${latex.outerHTML}</span>`,
-      { left: box.left, top: box.top, width: box.width, height: box.height },
+      preview.html,
+      { left: preview.box.left, top: preview.box.top, width: preview.box.width, height: preview.box.height },
       collectTextHints(mirror),
     )
   }
@@ -293,8 +266,8 @@ export class DragController {
       clearTimeout(this.snapshotTimer)
       this.snapshotTimer = null
     }
-    const mf = this.options.getMathfield()
-    if (mf) mf.style.visibility = ''
+    const mf = this.options.getAdaptor()
+    if (mf) mf.element.style.visibility = ''
     this.lastPreviewKey = ''
     this.offset = -1
     this.placeholderIndex = -1

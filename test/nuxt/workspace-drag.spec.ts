@@ -10,9 +10,14 @@ class FakeMathField extends HTMLElement {
   errors: unknown[] = []
   position = 0
   lastOffset = 0
+  mode = 'math'
+  menuItems: unknown[] = []
   focused = false
   readOnly = false
   mathVirtualKeyboardPolicy = 'manual'
+  placeholder = ''
+  maxMatrixCols = 0
+  defaultMode = 'math'
   selection: { ranges: [number, number][] } = { ranges: [[0, 0]] }
   selectionIsCollapsed = true
   override shadowRoot = {
@@ -34,6 +39,12 @@ class FakeMathField extends HTMLElement {
     return false
   }
 
+  resetUndo() {}
+
+  getElementInfo() {
+    return undefined
+  }
+
   hasFocus() {
     return this.focused
   }
@@ -41,6 +52,8 @@ class FakeMathField extends HTMLElement {
   override focus() {
     this.focused = true
   }
+
+  override blur() {}
 
   getOffsetFromPoint() {
     return 0

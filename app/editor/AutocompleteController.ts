@@ -1,4 +1,4 @@
-import type { MathfieldElement } from 'mathlive'
+import type { EditorAdaptor } from './EditorAdaptor'
 import { getElementByCommand } from '~/data/equation-elements'
 import type { EquationElement } from '~/types/equation'
 import { DISABLED_LATEX_AUTOCOMPLETE_COMMANDS } from '~/utils/latex-autocomplete'
@@ -14,9 +14,9 @@ const STYLE_SWITCH_COMMANDS = new Set([
 const ROOT_ENVIRONMENT_COMMANDS = new Set(['displayline', 'displaylines'])
 
 type AutocompleteOptions = {
-  getMathfield: () => MathfieldElement | null
+  getAdaptor: () => EditorAdaptor | null
   insertElement: (element: EquationElement) => void
-  commit: (mf: MathfieldElement) => void
+  commit: (adaptor: EditorAdaptor) => void
 }
 
 export class AutocompleteController {
@@ -25,7 +25,7 @@ export class AutocompleteController {
 
   constructor(private readonly options: AutocompleteOptions) {}
 
-  trackKeydown(mf: MathfieldElement, event: KeyboardEvent): void {
+  trackKeydown(adaptor: EditorAdaptor, event: KeyboardEvent): void {
     if (event.ctrlKey || event.metaKey || event.altKey) return
     if (event.key === '\\') {
       this.active = true
@@ -33,7 +33,7 @@ export class AutocompleteController {
       return
     }
     if (!this.active) return
-    if (mf.mode !== 'latex' && event.key !== 'Backspace') {
+    if (adaptor.mode !== 'latex' && event.key !== 'Backspace') {
       this.reset()
       return
     }
@@ -42,64 +42,61 @@ export class AutocompleteController {
     else if (event.key === 'Escape') this.reset()
   }
 
-  completeCommand(mf: MathfieldElement, event: KeyboardEvent): boolean {
-    if (mf.mode !== 'latex') return false
+  completeCommand(adaptor: EditorAdaptor, event: KeyboardEvent): boolean {
+    if (adaptor.mode !== 'latex') return false
     const name = this.command
     if (!name) return false
 
     const element = getElementByCommand(name)
     if (element) {
-      this.rejectNativeCompletion(mf, event)
+      this.rejectNativeCompletion(adaptor, event)
       this.options.insertElement(element)
       return true
     }
     if (DISABLED_LATEX_AUTOCOMPLETE_COMMANDS.has(name)) {
-      this.rejectNativeCompletion(mf, event)
+      this.rejectNativeCompletion(adaptor, event)
       return true
     }
     if (STYLE_SWITCH_COMMANDS.has(name)) {
-      this.completeStyleSwitch(mf, name, event)
+      this.completeStyleSwitch(adaptor, name, event)
       return true
     }
     if (ROOT_ENVIRONMENT_COMMANDS.has(name)) {
-      this.rejectNativeCompletion(mf, event)
+      this.rejectNativeCompletion(adaptor, event)
       return true
     }
     return false
   }
 
   readonly onSuggestionClick = (event: MouseEvent): void => {
-    const item = (event.target as Element | null)?.closest<HTMLElement>(
-      '#mathlive-suggestion-popover [data-command]',
-    )
-    const name = item?.dataset.command?.match(/^\\([a-zA-Z]+)/)?.[1]
-    const mf = this.options.getMathfield()
-    if (!name || !DISABLED_LATEX_AUTOCOMPLETE_COMMANDS.has(name) || mf?.mode !== 'latex') return
+    const adaptor = this.options.getAdaptor()
+    const name = adaptor?.suggestionCommandAt(event.target)
+    if (!name || !DISABLED_LATEX_AUTOCOMPLETE_COMMANDS.has(name) || adaptor?.mode !== 'latex') return
     event.preventDefault()
     event.stopImmediatePropagation()
-    mf.executeCommand(['complete', 'reject'])
-    if (mf.value === '') mf.mode = 'math'
+    adaptor.executeCommand(['complete', 'reject'])
+    if (adaptor.value === '') adaptor.mode = 'math'
     this.reset()
   }
 
-  private rejectNativeCompletion(mf: MathfieldElement, event: Event): void {
+  private rejectNativeCompletion(adaptor: EditorAdaptor, event: Event): void {
     event.preventDefault()
     event.stopPropagation()
-    mf.executeCommand(['complete', 'reject'])
-    if (mf.value === '') mf.mode = 'math'
+    adaptor.executeCommand(['complete', 'reject'])
+    if (adaptor.value === '') adaptor.mode = 'math'
     this.reset()
   }
 
   private completeStyleSwitch(
-    mf: MathfieldElement,
+    adaptor: EditorAdaptor,
     name: string,
     event: KeyboardEvent,
   ): void {
-    this.rejectNativeCompletion(mf, event)
-    const range = firstElementRangeAfter(mf)
+    this.rejectNativeCompletion(adaptor, event)
+    const range = firstElementRangeAfter(adaptor)
     if (range) {
-      mf.selection = { ranges: [range] }
-      mf.insert(`\\${name}#@`, {
+      adaptor.selection = { ranges: [range] }
+      adaptor.insert(`\\${name}#@`, {
         insertionMode: 'replaceSelection',
         format: 'latex',
         mode: 'math',
@@ -107,7 +104,7 @@ export class AutocompleteController {
         scrollIntoView: true,
       })
     } else {
-      mf.insert(`\\${name}{#0}`, {
+      adaptor.insert(`\\${name}{#0}`, {
         selectionMode: 'placeholder',
         format: 'latex',
         mode: 'math',
@@ -115,7 +112,7 @@ export class AutocompleteController {
         scrollIntoView: true,
       })
     }
-    this.options.commit(mf)
+    this.options.commit(adaptor)
   }
 
   private reset(): void {

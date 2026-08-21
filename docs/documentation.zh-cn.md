@@ -6,6 +6,7 @@
 
 | 文档 | 内容 |
 |------|------|
+| [架构：EquationDocument 与 EditorAdaptor](architecture.zh-cn.md) | 两条稳定边界：document 拥有数据、adaptor 隔离后端、workaround 集中 |
 | [编辑器与拖拽插入](editor.zh-cn.md) | `<math-field>` 初始化、状态单例、拖拽插入、mirror 预览、偏移计算 |
 | [Text 文本框编辑](text-box.zh-cn.md) | 零宽边界 marker、空盒哨兵、删除/输入整组重建、字体样式拖放 |
 | [编辑语义](edit-semantics.zh-cn.md) | 空组恢复 placeholder、accent 居中/宽帽修正、Backspace 结构解包 |

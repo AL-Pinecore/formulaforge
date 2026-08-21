@@ -1,18 +1,14 @@
 <script setup lang="ts">
-import type { MathfieldElement } from 'mathlive'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { restoreEmptyGroupLatex } from '~/utils/empty-group'
+import { blockImeBeforeInput, blockImeEvent } from '~/utils/ime-block'
 import { isAccentConstructLatex } from '~/utils/accent'
 import { isFontStyleElement } from '~/utils/font-styles'
-import { ensurePlaceholderSupport } from '~/utils/mathfield-placeholder'
-import { ensureAccentPositioning } from '~/utils/mathfield-accent'
 import { removeElementAtPlaceholder } from '~/utils/remove-empty-element'
-import { normalizePortableLatex } from '~/utils/latex-normalize'
 import { matrixCommandsForKey } from '~/utils/matrix'
 import {
   addTextBoundaries,
   isEmptyTextLatex,
-  stripEmptyTextSentinel,
   stripTextBoundaries,
   withEmptyTextSentinel,
 } from '~/utils/text-boundary'
@@ -20,21 +16,13 @@ import type { EquationElement } from '~/types/equation'
 import { useI18n } from '~/composables/useI18n'
 import { invoke } from '@tauri-apps/api/core'
 import { isTauriRuntime } from '~/composables/useEquationExport'
-import { EditorHistory } from '~/editor/EditorHistory'
+import { useEquation } from '~/composables/useEquation'
+import type { EditorAdaptor } from '~/editor/EditorAdaptor'
+import { MathLiveEditorAdaptor } from '~/editor/MathLiveEditorAdaptor'
 import { DragController, type DragPreviewBox } from '~/editor/DragController'
 import { AutocompleteController } from '~/editor/AutocompleteController'
 import { ContextMenuController } from '~/editor/ContextMenuController'
-import {
-  disableNativeHistory,
-  ensureMathMode,
-  formatLatexErrors,
-} from '~/editor/MathLiveAdapter'
-import {
-  enterPlaceholder,
-  isSinglePlaceholderSelection,
-  placeholderIndexAtPoint,
-  selectPlaceholderAtPoint,
-} from '~/editor/SelectionController'
+import { isSinglePlaceholderSelection } from '~/editor/SelectionController'
 import { matrixContextAtCaret } from '~/editor/MatrixController'
 import {
   applyFontStyle,
@@ -59,12 +47,11 @@ const props = withDefaults(defineProps<{ fontSize: number; displayStyle?: boolea
 })
 
 const emit = defineEmits<{
-  'latex-change': [value: string, errors: string[]]
-  'undo-state': [canUndo: boolean, canRedo: boolean]
   toast: [message: string, kind: 'success' | 'error']
 }>()
 
 const { t } = useI18n()
+const { document: equationDocument } = useEquation()
 
 const PLACEHOLDER_CLICK_PAD = 10
 const TEXT_FILE_EXTENSIONS = ['tex', 'latex', 'txt', 'md', 'markdown']
@@ -81,21 +68,17 @@ const previewTextHints = ref<TextHint[]>([])
 const visibleTextHints = computed(() => insertionPreview.value ? previewTextHints.value : textHints.value)
 const caretTextBox = ref<{ left: number; top: number; width: number; height: number } | null>(null)
 const emptyTextCaretBox = ref<{ left: number; top: number; width: number; height: number } | null>(null)
-let mathfield: MathfieldElement | null = null
+let adaptor: EditorAdaptor | null = null
 let disposed = false
 let textHintRaf = 0
-let fractionRaf = 0
-let fractionObserver: MutationObserver | null = null
 
-const history = new EditorHistory()
-
-function getMf(): MathfieldElement | null {
-  return mathfield
+function getAdaptor(): EditorAdaptor | null {
+  return adaptor
 }
 
 const dragController = new DragController(
   {
-    getMathfield: getMf,
+    getAdaptor,
     getContainer: () => containerEl.value,
     setDragging: (value) => { dragging.value = value },
     setPreview: (html, box, hints) => {
@@ -111,10 +94,10 @@ const dragController = new DragController(
 )
 
 const autocompleteController = new AutocompleteController({
-  getMathfield: getMf,
+  getAdaptor,
   insertElement: (element) => { void insertElement(element) },
-  commit: (mf) => {
-    publishState(mf)
+  commit: (a) => {
+    publishState(a)
     scheduleUpdateTextHints()
   },
 })
@@ -127,163 +110,19 @@ const contextMenuController = new ContextMenuController({
   selectionChanged: onSelectionChange,
 })
 
-function emitUndoState() {
-  emit('undo-state', history.canUndo, history.canRedo)
-}
-
-function recordHistory(mf: MathfieldElement): void {
-  history.record({ latex: publicLatex(mf), position: mf.position })
-}
-
-function publishState(mf: MathfieldElement, record = true) {
-  disableNativeHistory(mf)
-  if (record) recordHistory(mf)
-  emit(
-    'latex-change',
-    publicLatex(mf),
-    formatLatexErrors(mf.errors ?? []),
-  )
-  emitUndoState()
-}
-
-function publicLatex(mf: MathfieldElement): string {
-  return normalizePortableLatex(
-    stripEmptyTextSentinel(
-      stripTextBoundaries(mf.getValue('latex-without-placeholders')).replace(
-        /\\placeholder(?:\[[^\]]*\])?\{\}/g,
-        '',
-      ),
-    ),
-  )
+function publishState(a?: EditorAdaptor, record = true) {
+  const target = a ?? getAdaptor()
+  if (!target) return
+  target.resetUndo()
+  const latex = target.readPublicLatex()
+  const errors = target.readErrors()
+  if (record) equationDocument.commit(latex, target.position, errors)
+  else equationDocument.restore(latex, target.position, errors)
 }
 
 function updateTextHints() {
-  const mf = getMf()
-  textHints.value = mf ? collectTextHints(mf) : []
-}
-
-let inkCanvasContext: CanvasRenderingContext2D | null = null
-
-function includePaintedRect(
-  bounds: { top: number; bottom: number },
-  rect: { top: number; bottom: number },
-): void {
-  bounds.top = Math.min(bounds.top, rect.top)
-  bounds.bottom = Math.max(bounds.bottom, rect.bottom)
-}
-
-function paintedBounds(root: HTMLElement): { top: number; bottom: number } | null {
-  inkCanvasContext ??= document.createElement('canvas').getContext('2d')
-  const context = inkCanvasContext
-  if (!context) {
-    return null
-  }
-
-  const bounds = { top: Infinity, bottom: -Infinity }
-  for (const leaf of Array.from(root.querySelectorAll<HTMLElement>('span'))) {
-    const text = leaf.children.length === 0 ? leaf.textContent : null
-    if (!text || !text.trim() || leaf.classList.contains('ML__pstrut')) {
-      continue
-    }
-    const style = getComputedStyle(leaf)
-    const transparent = style.color.startsWith('rgba') && style.color.endsWith(', 0)')
-    if (style.visibility === 'hidden' || Number(style.opacity) === 0 || transparent) {
-      continue
-    }
-    const rect = leaf.getBoundingClientRect()
-    context.font = style.font
-    const metrics = context.measureText(text)
-    const fontAscent = metrics.fontBoundingBoxAscent
-    if (!Number.isFinite(fontAscent)) {
-      includePaintedRect(bounds, rect)
-      continue
-    }
-    const baseline = rect.top + fontAscent
-    includePaintedRect(bounds, {
-      top: baseline - metrics.actualBoundingBoxAscent,
-      bottom: baseline + metrics.actualBoundingBoxDescent,
-    })
-  }
-
-  // Structural ink is not represented by text metrics. This also lets an
-  // outer fraction account for corrected rules inside a nested fraction.
-  for (const element of Array.from(
-    root.querySelectorAll<HTMLElement>('.ML__frac-line, .ML__sqrt-line, .ML__rule, .ml-placeholder, svg'),
-  )) {
-    const rect = element.getBoundingClientRect()
-    if (element.classList.contains('ML__frac-line')) {
-      const after = getComputedStyle(element, '::after')
-      const top = rect.top + (parseFloat(after.marginTop) || 0)
-      includePaintedRect(bounds, { top, bottom: top + (parseFloat(after.minHeight) || rect.height) })
-    } else {
-      includePaintedRect(bounds, rect)
-    }
-  }
-
-  return Number.isFinite(bounds.top) && Number.isFinite(bounds.bottom) ? bounds : null
-}
-
-// MathLive's public bounds include invisible font struts. Measure the actual
-// painted glyph boxes instead, then place the rule midway between them.
-function positionFractionRules(mf: MathfieldElement): void {
-  const root = mf.shadowRoot
-  if (!root) {
-    return
-  }
-  const lines = Array.from(root.querySelectorAll<HTMLElement>('.ML__frac-line'))
-  // Process inner rules first so their painted position is included when an
-  // enclosing fraction measures a nested numerator or denominator.
-  lines.sort((a, b) => {
-    const depth = (element: Element) => {
-      let result = 0
-      for (let parent = element.parentElement; parent; parent = parent.parentElement) result++
-      return result
-    }
-    return depth(b) - depth(a)
-  })
-  for (const lineEl of lines) {
-    const lineRow = lineEl.parentElement
-    const denominatorRow = lineRow?.previousElementSibling as HTMLElement | null
-    const numeratorRow = lineRow?.nextElementSibling as HTMLElement | null
-    if (!lineRow || !numeratorRow || !denominatorRow) {
-      continue
-    }
-    const numerator = paintedBounds(numeratorRow)
-    const denominator = paintedBounds(denominatorRow)
-    if (!numerator || !denominator) {
-      continue
-    }
-    const currentShift =
-      parseFloat(lineRow.style.transform.match(/translateY\(([-\d.eE+]+)px\)/)?.[1] ?? '0') || 0
-    const lineRect = lineEl.getBoundingClientRect()
-    const after = getComputedStyle(lineEl, '::after')
-    const lineTop = lineRect.top - currentShift + (parseFloat(after.marginTop) || 0)
-    const lineBottom = lineTop + (parseFloat(after.minHeight) || lineRect.height)
-    const shift = ((denominator.top - lineBottom) - (lineTop - numerator.bottom)) / 2
-    const limit = (parseFloat(getComputedStyle(lineRow).fontSize) || props.fontSize) * 0.25
-    const nextShift = Math.max(-limit, Math.min(limit, shift))
-    if (Math.abs(nextShift - currentShift) > 0.01) {
-      lineRow.style.transform = `translateY(${nextShift}px)`
-    }
-  }
-}
-
-function scheduleFractionRules(mf: MathfieldElement): void {
-  cancelAnimationFrame(fractionRaf)
-  fractionRaf = requestAnimationFrame(() => positionFractionRules(mf))
-}
-
-function observeFractionRendering(mf: MathfieldElement): void {
-  const shadow = mf.shadowRoot
-  if (!shadow || fractionObserver || typeof ShadowRoot === 'undefined' || !(shadow instanceof ShadowRoot)) {
-    return
-  }
-  fractionObserver = new MutationObserver(() => {
-    // Mutation observers run before the browser's next paint. Correct newly
-    // rendered fraction rows here so their unpositioned state is never shown.
-    positionFractionRules(mf)
-  })
-  fractionObserver.observe(shadow, { childList: true, subtree: true })
+  const a = getAdaptor()
+  textHints.value = a ? collectTextHints(a) : []
 }
 
 function scheduleUpdateTextHints() {
@@ -294,23 +133,18 @@ function scheduleUpdateTextHints() {
     // its queued render, keeps the highlight in sync with inserted/deleted
     // characters instead of using the previous frame's bounds.
     syncCaretInText()
-    const mf = getMf()
-    if (mf) {
-      scheduleFractionRules(mf)
-    }
+    getAdaptor()?.scheduleFractionRules()
   })
 }
 
 const PLACEHOLDER_LATEX_RE = /^\\placeholder(?:\[[^\]]*\])?\{\}$/
 
 function syncPlaceholderSelected() {
-  const mf = getMf()
-  if (!mf) {
-    return
-  }
-  mf.classList.toggle(
+  const a = getAdaptor()
+  if (!a) return
+  a.element.classList.toggle(
     'placeholder-selected',
-    mf.hasFocus() && isSinglePlaceholderSelection(mf),
+    a.hasFocus() && isSinglePlaceholderSelection(a),
   )
 }
 
@@ -319,34 +153,34 @@ function syncPlaceholderSelected() {
 // that box gets a highlight based on its rendered character bounds. A global
 // CSS rule would light up every Text box at once.
 function syncCaretInText() {
-  const mf = getMf()
-  if (!mf) {
+  const a = getAdaptor()
+  if (!a) {
     caretTextBox.value = null
     emptyTextCaretBox.value = null
     return
   }
-  const position = mf.position
-  const group = textGroupAtCaret(mf)
-  const accent = accentGroupAtCaret(mf)
+  const position = a.position
+  const group = textGroupAtCaret(a)
+  const accent = accentGroupAtCaret(a)
   // MathLive's `hasFocus()` (an internal `blurred` flag) can go stale when
   // focus is moved programmatically around its keyboard sink, so use the real
   // DOM focus instead.
-  const focused = document.activeElement === mf
+  const focused = document.activeElement === a.element
   const inText = Boolean(
     focused &&
-      mf.selectionIsCollapsed &&
+      a.selectionIsCollapsed &&
       group &&
       position >= group.start &&
       position <= group.end,
   )
-  mf.classList.toggle('caret-in-text', inText)
+  a.element.classList.toggle('caret-in-text', inText)
   const empty = Boolean(group && isEmptyTextLatex(group.latex))
   // Empty Text shows its gray hint only; Non-empty Text uses the actual
   // character bounds, not marker positions, as its highlight.
   const textBox = inText && group && !empty ? group.bounds : null
   // A filled accent highlights its argument the same way a Text box does.
-  const inAccent = Boolean(focused && mf.selectionIsCollapsed && accent)
-  const accentBounds = accent && inAccent ? accentBoundsAt(mf, accent) : null
+  const inAccent = Boolean(focused && a.selectionIsCollapsed && accent)
+  const accentBounds = accent && inAccent ? accentBoundsAt(a, accent) : null
   const accentBox = accentBounds
     ? {
         left: accentBounds.left,
@@ -362,7 +196,7 @@ function syncCaretInText() {
   // word instead.
   let simulated = false
   if (inText && group && empty) {
-    const box = emptyTextHintBox(mf, group)
+    const box = emptyTextHintBox(a, group)
     if (box) {
       const width = Math.min(10, Math.max(2, props.fontSize * 0.08))
       const height = props.fontSize * 0.76
@@ -378,7 +212,7 @@ function syncCaretInText() {
   if (!simulated) {
     emptyTextCaretBox.value = null
   }
-  mf.classList.toggle('empty-text-caret', simulated)
+  a.element.classList.toggle('empty-text-caret', simulated)
 }
 
 function onSelectionChange() {
@@ -387,17 +221,18 @@ function onSelectionChange() {
   scheduleUpdateTextHints()
 }
 
-function onMfInput(mf: MathfieldElement) {
-  ensureMathMode(mf)
-  publishState(mf)
-  scheduleRestorePlaceholders(mf)
+function onMfInput() {
+  const a = getAdaptor()
+  if (!a) return
+  a.ensureMathMode()
+  publishState(a)
+  scheduleRestorePlaceholders(a)
   syncCaretInText()
   scheduleUpdateTextHints()
 }
 
-function onUndoStateChange(mf: MathfieldElement) {
-  disableNativeHistory(mf)
-  emitUndoState()
+function onUndoStateChange() {
+  getAdaptor()?.resetUndo()
   scheduleUpdateTextHints()
 }
 
@@ -453,38 +288,31 @@ function loadDroppedFile(file: File): void {
   file
     .text()
     .then((contents) => {
-      const mf = getMf()
-      if (!mf || !contents.trim()) return
-      if (mf.value !== contents) {
-        mf.setValue(addTextBoundaries(contents), { mode: 'math', silenceNotifications: true })
+      const a = getAdaptor()
+      if (!a || !contents.trim()) return
+      if (a.value !== contents) {
+        a.setValue(addTextBoundaries(contents), { mode: 'math', silenceNotifications: true })
       }
-      publishState(mf)
+      publishState(a)
       emit('toast', t('toast.loadedFile', { file: file.name }), 'success')
     })
     .catch(() => emit('toast', t('toast.couldNotRead'), 'error'))
 }
 
-function configureMathfield(mf: MathfieldElement) {
-  mf.placeholder = t('workspace.placeholder')
-  mf.mathVirtualKeyboardPolicy = 'manual'
-  mf.maxMatrixCols = MAX_MATRIX_COLUMNS
-  mf.defaultMode = props.displayStyle ? 'math' : 'inline-math'
-  mf.style.fontSize = `${props.fontSize}px`
-  const normalized = addTextBoundaries(mf.value)
-  if (normalized !== mf.value) {
-    mf.setValue(normalized, { mode: 'math', silenceNotifications: true })
-  }
-  ensurePlaceholderSupport(mf)
-  ensureAccentPositioning(mf)
-  observeFractionRendering(mf)
-  attachImeBlocker(mf)
-  contextMenuController.configure(mf)
-  publishState(mf)
+function configureAdaptor(a: EditorAdaptor) {
+  a.configure({
+    placeholder: t('workspace.placeholder'),
+    maxMatrixCols: MAX_MATRIX_COLUMNS,
+    fontSize: props.fontSize,
+    displayStyle: props.displayStyle,
+  })
+  contextMenuController.configure(a)
+  publishState(a)
 }
 
-async function ensureMathfield(): Promise<MathfieldElement | null> {
-  if (mathfield) {
-    return mathfield
+async function ensureAdaptor(): Promise<EditorAdaptor | null> {
+  if (adaptor) {
+    return adaptor
   }
   try {
     await customElements.whenDefined('math-field')
@@ -495,11 +323,12 @@ async function ensureMathfield(): Promise<MathfieldElement | null> {
     if (disposed) {
       return null
     }
-    const element = containerEl.value?.querySelector('math-field') as MathfieldElement | null
-    if (element && typeof element.canUndo === 'function') {
-      mathfield = element
-      configureMathfield(element)
-      return mathfield
+    const element = containerEl.value?.querySelector('math-field') as HTMLElement | null
+    if (element && typeof (element as { canUndo?: unknown }).canUndo === 'function') {
+      const next = new MathLiveEditorAdaptor(element)
+      adaptor = next
+      configureAdaptor(next)
+      return next
     }
     await new Promise((resolve) => setTimeout(resolve, 50))
   }
@@ -525,8 +354,8 @@ async function insertElement(
   x?: number,
   y?: number,
 ) {
-  const mf = await ensureMathfield()
-  if (!mf) {
+  const a = await ensureAdaptor()
+  if (!a) {
     emit('toast', t('toast.notReady'), 'error')
     return
   }
@@ -534,60 +363,48 @@ async function insertElement(
     isFontStyleElement(element.id) &&
     typeof x === 'number' &&
     typeof y === 'number' &&
-    applyFontStyle(mf, element.id, x, y)
+    applyFontStyle(a, element.id, x, y)
   ) {
-    publishState(mf)
+    publishState(a)
     scheduleUpdateTextHints()
     return
   }
   let positioned = false
   if (placeholderIndex >= 0 && typeof x === 'number' && typeof y === 'number') {
-    positioned = selectPlaceholderAtPoint(mf, x, y)
+    positioned = a.selectPlaceholderAtPoint(x, y)
   }
   if (!positioned) {
     if (targetOffset != null && Number.isInteger(targetOffset) && targetOffset >= 0) {
-      mf.position = targetOffset
+      a.position = targetOffset
     }
   }
   const inserted = withEmptyTextSentinel(element.latex)
-  if (inserted !== element.latex && !positioned && textGroupNearPosition(mf, mf.position)) {
+  if (inserted !== element.latex && !positioned && textGroupNearPosition(a, a.position)) {
     // Inserting an empty Text box inside or right next to another one would
     // only merge into it; skip the insertion but keep the caret (and the
     // keyboard focus) where it was.
-    if (document.activeElement !== mf) {
-      mf.focus()
-      if (document.activeElement !== mf) {
-        const keyboardSink = mf.shadowRoot?.querySelector<HTMLElement>('.ML__keyboard-sink')
-        keyboardSink?.focus()
-      }
-    }
+    a.focusKeyboard()
     return
   }
   if (!positioned) {
-    mf.position = clampOffsetOutsideText(mf, mf.position, x)
+    a.position = clampOffsetOutsideText(a, a.position, x)
   }
-  mf.insert(addTextBoundaries(inserted), {
+  a.insert(addTextBoundaries(inserted), {
     selectionMode: 'placeholder',
     mode: 'math',
     focus: true,
     scrollIntoView: true,
   })
   requestAnimationFrame(() => {
-    if (disposed || getMf() !== mf) {
+    if (disposed || getAdaptor() !== a) {
       return
     }
     // A drag-and-drop insert can leave the field without real keyboard focus
     // (MathLive's focus() skips when its state is stale); the caret would stay
     // invisible. Restore it, then park the caret inside an inserted empty Text.
-    if (document.activeElement !== mf) {
-      mf.focus()
-      if (document.activeElement !== mf) {
-        const keyboardSink = mf.shadowRoot?.querySelector<HTMLElement>('.ML__keyboard-sink')
-        keyboardSink?.focus()
-      }
-    }
+    a.focusKeyboard()
     if (inserted !== element.latex) {
-      snapCaretIntoEmptyText(mf)
+      snapCaretIntoEmptyText(a)
     }
     syncCaretInText()
     scheduleUpdateTextHints()
@@ -595,16 +412,16 @@ async function insertElement(
 }
 
 async function insertLatex(text: string, targetOffset?: number) {
-  const mf = await ensureMathfield()
-  if (!mf) {
+  const a = await ensureAdaptor()
+  if (!a) {
     emit('toast', t('toast.notReady'), 'error')
     return
   }
   if (targetOffset != null && Number.isInteger(targetOffset) && targetOffset >= 0) {
-    mf.position = targetOffset
+    a.position = targetOffset
   }
-  mf.position = clampOffsetOutsideText(mf, mf.position)
-  mf.insert(addTextBoundaries(text), {
+  a.position = clampOffsetOutsideText(a, a.position)
+  a.insert(addTextBoundaries(text), {
     selectionMode: 'placeholder',
     mode: 'math',
     focus: true,
@@ -617,22 +434,22 @@ const RESTORE_PLACEHOLDER_GLOBAL_RE = /\\placeholder(?:\[[^\]]*\])?\{\}/g
 // Re-inject placeholders into emptied groups. Runs as a microtask right after
 // the content change so it lands before MathLive's next (rAF-deferred) render,
 // avoiding a visible frame of the collapsed empty group.
-function scheduleRestorePlaceholders(mf: MathfieldElement) {
-  queueMicrotask(() => restoreEmptyGroups(mf))
+function scheduleRestorePlaceholders(a: EditorAdaptor) {
+  queueMicrotask(() => restoreEmptyGroups(a))
 }
 
-function moveToPlaceholder(mf: MathfieldElement, index: number) {
-  mf.position = 0
+function moveToPlaceholder(a: EditorAdaptor, index: number) {
+  a.position = 0
   for (let i = 0; i <= index && i < 64; i++) {
-    mf.executeCommand('moveToNextPlaceholder')
+    a.executeCommand('moveToNextPlaceholder')
   }
 }
 
-function restoreEmptyGroups(mf: MathfieldElement) {
-  if (disposed || !mf.hasFocus()) {
+function restoreEmptyGroups(a: EditorAdaptor) {
+  if (disposed || !a.hasFocus()) {
     return
   }
-  const original = mf.value
+  const original = a.value
   const withPlaceholders = restoreEmptyGroupLatex(original) ?? original
   const fixed = addTextBoundaries(normalizePublicLatex(withPlaceholders))
   if (fixed === original) {
@@ -641,15 +458,15 @@ function restoreEmptyGroups(mf: MathfieldElement) {
   // Count the placeholders before the caret so the restored placeholder ends up
   // focused (rather than always the first one in the formula).
   const caretPlaceholderIndex = (
-    mf.getValue(0, mf.position).match(RESTORE_PLACEHOLDER_GLOBAL_RE) ?? []
+    a.getValue(0, a.position).match(RESTORE_PLACEHOLDER_GLOBAL_RE) ?? []
   ).length
-  const publicPrefixLength = normalizePublicLatex(mf.getValue(0, mf.position)).length
-  mf.setValue(fixed, { mode: 'math', silenceNotifications: true })
-  publishState(mf)
+  const publicPrefixLength = normalizePublicLatex(a.getValue(0, a.position)).length
+  a.setValue(fixed, { mode: 'math', silenceNotifications: true })
+  publishState(a)
   if (withPlaceholders !== original) {
-    moveToPlaceholder(mf, caretPlaceholderIndex)
+    moveToPlaceholder(a, caretPlaceholderIndex)
   } else {
-    mf.position = publicStringOffsetToModel(mf, publicPrefixLength)
+    a.position = publicStringOffsetToModel(a, publicPrefixLength)
   }
 }
 
@@ -662,22 +479,22 @@ const CARET_MARKER = '\\bigstar'
 // caret's placeholder is briefly replaced by a unique marker, located in the
 // serialized value, and the original value is restored immediately. Undo
 // Native recording stays disabled; the semantic history never sees this round-trip.
-function unwrapElementAtCaret(mf: MathfieldElement): { latex: string; caretOffset: number } | null {
-  const original = mf.value
+function unwrapElementAtCaret(a: EditorAdaptor): { latex: string; caretOffset: number } | null {
+  const original = a.value
   let marked = ''
   try {
-    mf.insert(CARET_MARKER, {
+    a.insert(CARET_MARKER, {
       insertionMode: 'replaceSelection',
       format: 'latex',
       mode: 'math',
       silenceNotifications: true,
     })
-    marked = mf.value
+    marked = a.value
   } catch {
     marked = ''
   } finally {
-    mf.setValue(original, { mode: 'math', silenceNotifications: true })
-    mf.resetUndo()
+    a.setValue(original, { mode: 'math', silenceNotifications: true })
+    a.resetUndo()
   }
   const markerIndex = marked.indexOf(CARET_MARKER)
   if (markerIndex < 0 || marked.indexOf(CARET_MARKER, markerIndex + 1) >= 0) {
@@ -693,8 +510,8 @@ function unwrapElementAtCaret(mf: MathfieldElement): { latex: string; caretOffse
 // `[...]`), so we intercept it and restore the index placeholder instead. The
 // caret is located in the serialized LaTeX with a marker round-trip (same trick
 // as unwrapElementAtCaret); the caret position is preserved across the trip.
-function rootIndexAtomBeforeCaret(mf: MathfieldElement): boolean {
-  const atom = mf.getElementInfo(mf.position) ?? mf.getElementInfo(mf.position - 1)
+function rootIndexAtomBeforeCaret(a: EditorAdaptor): boolean {
+  const atom = a.getElementInfo(a.position) ?? a.getElementInfo(a.position - 1)
   if (
     !atom?.latex ||
     atom.latex === '' ||
@@ -703,27 +520,27 @@ function rootIndexAtomBeforeCaret(mf: MathfieldElement): boolean {
   ) {
     return false
   }
-  if (!mf.value.includes('\\sqrt[')) {
+  if (!a.value.includes('\\sqrt[')) {
     return false
   }
-  const position = mf.position
-  const original = mf.value
+  const position = a.position
+  const original = a.value
   let marked = ''
   try {
-    mf.insert(CARET_MARKER, {
+    a.insert(CARET_MARKER, {
       insertionMode: 'replaceSelection',
       format: 'latex',
       mode: 'math',
       silenceNotifications: true,
     })
-    marked = mf.value
+    marked = a.value
   } catch {
     marked = ''
   } finally {
-    mf.setValue(original, { mode: 'math', silenceNotifications: true })
-    mf.resetUndo()
+    a.setValue(original, { mode: 'math', silenceNotifications: true })
+    a.resetUndo()
   }
-  mf.position = position
+  a.position = position
   const markerPos = marked.indexOf(CARET_MARKER)
   if (markerPos < 0) {
     return false
@@ -752,18 +569,18 @@ let caretArrivedByNavigation = false
 // `selection-change` disambiguates which side the caret reached.
 let lastArrowDirection: 'left' | 'right' | null = null
 
-function handleMatrixResizeKey(event: KeyboardEvent, mf: MathfieldElement): boolean {
+function handleMatrixResizeKey(event: KeyboardEvent, a: EditorAdaptor): boolean {
   if (
     (event.key !== 'Enter' && event.key !== 'Backspace' && event.key !== 'Delete') ||
     event.altKey ||
     event.ctrlKey ||
     event.metaKey ||
     event.shiftKey ||
-    (!mf.selectionIsCollapsed && !isSinglePlaceholderSelection(mf))
+    (!a.selectionIsCollapsed && !isSinglePlaceholderSelection(a))
   ) {
     return false
   }
-  const context = matrixContextAtCaret(mf)
+  const context = matrixContextAtCaret(a)
   if (!context) return false
   const commands = matrixCommandsForKey(
     {
@@ -780,19 +597,13 @@ function handleMatrixResizeKey(event: KeyboardEvent, mf: MathfieldElement): bool
 
   event.preventDefault()
   event.stopPropagation()
-  contextMenuController.executeMatrixCommands(mf, commands)
+  contextMenuController.executeMatrixCommands(a, commands)
   return true
 }
 
 function onMfContextMenu(event: MouseEvent) {
-  const mf = getMf()
-  if (mf) contextMenuController.onContextMenu(mf, event, Math.max(20, props.fontSize))
-}
-
-const NON_ASCII_RE = /[^\x00-\x7F]/
-
-function hasNonAsciiText(data: string | null | undefined): boolean {
-  return typeof data === 'string' && data.length > 0 && NON_ASCII_RE.test(data)
+  const a = getAdaptor()
+  if (a) contextMenuController.onContextMenu(a, event, Math.max(20, props.fontSize))
 }
 
 function handleUndoShortcut(event: KeyboardEvent): boolean {
@@ -834,22 +645,22 @@ function onMfKeydown(event: KeyboardEvent) {
     if (/^[a-zA-Z]$/.test(event.key)) {
       event.preventDefault()
       event.stopPropagation()
-      const mf = getMf()
-      if (mf) {
-        mf.insert(event.key, {
+      const a = getAdaptor()
+      if (a) {
+        a.insert(event.key, {
           insertionMode: 'replaceSelection',
           format: 'auto',
           mode: 'math',
           silenceNotifications: true,
         })
-        publishState(mf)
+        publishState(a)
         scheduleUpdateTextHints()
       }
     }
     return
   }
-  const mf = getMf()
-  if (mf) autocompleteController.trackKeydown(mf, event)
+  const a = getAdaptor()
+  if (a) autocompleteController.trackKeydown(a, event)
   const isArrowKey = event.key === 'ArrowLeft' || event.key === 'ArrowRight'
   const isModifierKey =
     event.key === 'Shift' ||
@@ -875,14 +686,6 @@ function onMfKeydown(event: KeyboardEvent) {
   }
 }
 
-// IME composition is blocked entirely: the math field is English-only, so
-// Chinese/Japanese/Korean and other scripts must never enter the model.
-function blockImeEvent(event: Event) {
-  event.preventDefault()
-  event.stopPropagation()
-  event.stopImmediatePropagation()
-}
-
 function onCompositionStart(event: CompositionEvent) {
   blockImeEvent(event)
 }
@@ -896,46 +699,15 @@ function onCompositionEnd(event: CompositionEvent) {
 }
 
 function onBeforeInput(event: Event) {
-  const inputEvent = event as InputEvent
-  if (inputEvent.inputType === 'insertCompositionText' || hasNonAsciiText(inputEvent.data)) {
-    blockImeEvent(event)
-  }
-}
-
-// Chromium composes the composition events across the shadow-DOM boundary, so
-// the host-level `@composition*.capture` handlers above catch them and stop
-// MathLive's internal keyboard-sink handler. WKWebView composes them too, but
-// its IME commits the final text through a plain `insertText` `input` event
-// (with non-ASCII `data`) that MathLive does not discard. Attach capture-phase
-// listeners directly to MathLive's shadow root (an ancestor of the keyboard
-// sink) so both the composition events and the committed IME text are blocked
-// before they reach MathLive in every engine.
-function attachImeBlocker(mf: MathfieldElement) {
-  const root = mf.shadowRoot
-  if (!root || typeof root.addEventListener !== 'function') {
-    return
-  }
-  root.addEventListener('compositionstart', blockImeEvent, true)
-  root.addEventListener('compositionupdate', blockImeEvent, true)
-  root.addEventListener('compositionend', blockImeEvent, true)
-  root.addEventListener('beforeinput', onBeforeInput, true)
-  root.addEventListener(
-    'input',
-    (event) => {
-      if (hasNonAsciiText((event as InputEvent).data)) {
-        blockImeEvent(event)
-      }
-    },
-    true,
-  )
+  blockImeBeforeInput(event)
 }
 
 function handleKeydown(event: KeyboardEvent) {
-  const mf = getMf()
-  if (!mf || !mf.hasFocus()) {
+  const a = getAdaptor()
+  if (!a || !a.hasFocus()) {
     return
   }
-  if (handleMatrixResizeKey(event, mf)) return
+  if (handleMatrixResizeKey(event, a)) return
   if (
     (event.key === 'Enter' || event.key === 'Tab') &&
     !event.ctrlKey &&
@@ -943,16 +715,16 @@ function handleKeydown(event: KeyboardEvent) {
     !event.altKey &&
     !event.shiftKey
   ) {
-    if (autocompleteController.completeCommand(mf, event)) return
+    if (autocompleteController.completeCommand(a, event)) return
   }
   const textInput = handleTextInput(
-    mf,
+    a,
     event,
     caretArrivedByNavigation,
     lastArrowDirection,
   )
   if (textInput === 'changed') {
-    publishState(mf)
+    publishState(a)
     syncCaretInText()
     scheduleUpdateTextHints()
   }
@@ -961,23 +733,23 @@ function handleKeydown(event: KeyboardEvent) {
   // so a single arrow press jumps out on either side (right before the closing
   // boundary, left before the opening one) where typing lands in math mode.
   if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
-    const accentTarget = accentArrowTarget(mf, event.key)
+    const accentTarget = accentArrowTarget(a, event.key)
     if (accentTarget != null) {
       event.preventDefault()
       event.stopPropagation()
-      mf.position = accentTarget
-      const emptyAccent = accentGroupAtAtom(mf, accentTarget)
-      if (emptyAccent && isAccentArgEmpty(mf, emptyAccent)) {
-        mf.selection = {
+      a.position = accentTarget
+      const emptyAccent = accentGroupAtAtom(a, accentTarget)
+      if (emptyAccent && isAccentArgEmpty(a, emptyAccent)) {
+        a.selection = {
           ranges: [[emptyAccent.start - 1, emptyAccent.start]],
         }
       }
       onSelectionChange()
       return
     }
-    const textNavigation = handleEmptyTextNavigation(mf, event)
+    const textNavigation = handleEmptyTextNavigation(a, event)
     if (textNavigation === 'changed') {
-      publishState(mf)
+      publishState(a)
       scheduleUpdateTextHints()
       return
     }
@@ -991,14 +763,14 @@ function handleKeydown(event: KeyboardEvent) {
   // capture; running it on a broader selection collapses it and can
   // re-serialize the whole formula as text. A full-range deletion is handled
   // explicitly so select-all + Delete clears cleanly on every engine.
-  if (!mf.selectionIsCollapsed && !isSinglePlaceholderSelection(mf)) {
-    const range = mf.selection?.ranges?.[0]
-    if (range && range[0] === 0 && range[1] >= mf.lastOffset) {
+  if (!a.selectionIsCollapsed && !isSinglePlaceholderSelection(a)) {
+    const range = a.selection?.ranges?.[0]
+    if (range && range[0] === 0 && range[1] >= a.lastOffset) {
       event.preventDefault()
       event.stopPropagation()
-      mf.value = ''
-      ensureMathMode(mf)
-      publishState(mf)
+      a.value = ''
+      a.ensureMathMode()
+      publishState(a)
       scheduleUpdateTextHints()
     }
     return
@@ -1007,33 +779,33 @@ function handleKeydown(event: KeyboardEvent) {
   // marker: step the caret across it first (into the text for a right marker,
   // so Delete right after a Text box edits the text instead of corrupting the
   // formula).
-  if (mf.selectionIsCollapsed) {
-    const relocated = relocateCaretAcrossBoundaries(mf, event.key)
-    if (relocated !== mf.position) {
-      mf.position = relocated
+  if (a.selectionIsCollapsed) {
+    const relocated = relocateCaretAcrossBoundaries(a, event.key)
+    if (relocated !== a.position) {
+      a.position = relocated
     }
   }
   // User-facing deletion semantics: Backspace deletes the character before the
   // caret (atom at `position`), Delete the one after it (atom at `position + 1`).
-  const target = event.key === 'Delete' ? mf.position + 1 : mf.position
-  const info = mf.getElementInfo(mf.position)
+  const target = event.key === 'Delete' ? a.position + 1 : a.position
+  const info = a.getElementInfo(a.position)
   const isPlaceholder =
-    isSinglePlaceholderSelection(mf) ||
+    isSinglePlaceholderSelection(a) ||
     (info?.latex != null && /^\\placeholder(?:\[[^\]]*\])?\{\}$/.test(info.latex))
   // Deleting a character inside an accent argument: MathLive treats the accent
   // construct as opaque, so its native deletion removes the whole accent or
   // nothing. Rebuild the argument without the targeted atom, like a Text box.
-  const accentTarget = accentGroupAtAtom(mf, target)
+  const accentTarget = accentGroupAtAtom(a, target)
   if (accentTarget && !isPlaceholder) {
     event.preventDefault()
     event.stopPropagation()
     const parts: string[] = []
     for (let offset = accentTarget.start; offset <= accentTarget.end; offset++) {
-      parts.push(mf.getElementInfo(offset)?.latex ?? '')
+      parts.push(a.getElementInfo(offset)?.latex ?? '')
     }
     const content = parts.filter((_, index) => accentTarget.start + index !== target).join('')
     const argument = content || '\\placeholder{}'
-    const originalAccent = mf.getElementInfo(accentTarget.constructOffset)?.latex
+    const originalAccent = a.getElementInfo(accentTarget.constructOffset)?.latex
     const replacement =
       originalAccent && (accentTarget.command === 'overbrace' || accentTarget.command === 'underbrace')
         ? originalAccent.replace(`{${parts.join('')}}`, `{${argument}}`)
@@ -1046,63 +818,63 @@ function handleKeydown(event: KeyboardEvent) {
         const deletedIndex = target - accentTarget.start
         let occurrence = 0
         for (let offset = 0; offset < accentTarget.constructOffset; offset++) {
-          if (mf.getElementInfo(offset)?.latex === originalAccent) occurrence++
+          if (a.getElementInfo(offset)?.latex === originalAccent) occurrence++
         }
         let stringIndex = -1
         for (let i = 0; i <= occurrence; i++) {
-          stringIndex = mf.value.indexOf(originalAccent, stringIndex + 1)
+          stringIndex = a.value.indexOf(originalAccent, stringIndex + 1)
         }
         if (stringIndex >= 0) {
           const next =
-            mf.value.slice(0, stringIndex) +
+            a.value.slice(0, stringIndex) +
             replacement +
-            mf.value.slice(stringIndex + originalAccent.length)
+            a.value.slice(stringIndex + originalAccent.length)
           const replacementOccurrence = next.slice(0, stringIndex).split(replacement).length - 1
-          mf.setValue(next, { mode: 'math', silenceNotifications: true })
+          a.setValue(next, { mode: 'math', silenceNotifications: true })
           let seen = 0
-          for (let offset = 0; offset <= mf.lastOffset; offset++) {
-            if (mf.getElementInfo(offset)?.latex !== replacement) continue
+          for (let offset = 0; offset <= a.lastOffset; offset++) {
+            if (a.getElementInfo(offset)?.latex !== replacement) continue
             if (seen++ !== replacementOccurrence) continue
-            const rebuiltAccent = accentGroupAtOffset(mf, offset)
+            const rebuiltAccent = accentGroupAtOffset(a, offset)
             if (rebuiltAccent) {
               if (content) {
-                mf.position = Math.max(
+                a.position = Math.max(
                   rebuiltAccent.start - 1,
                   Math.min(rebuiltAccent.end, rebuiltAccent.start + deletedIndex - 1),
                 )
               } else {
-                mf.selection = { ranges: [[rebuiltAccent.start - 1, rebuiltAccent.start]] }
+                a.selection = { ranges: [[rebuiltAccent.start - 1, rebuiltAccent.start]] }
               }
             }
             break
           }
-          publishState(mf)
+          publishState(a)
           onSelectionChange()
           scheduleUpdateTextHints()
           return
         }
       }
     }
-    mf.selection = {
+    a.selection = {
       ranges: [[accentTarget.start - 1, accentTarget.constructOffset]],
     }
-    mf.insert(replacement, {
+    a.insert(replacement, {
       insertionMode: 'replaceSelection',
       mode: 'math',
       format: 'latex',
       silenceNotifications: true,
     })
     if (content) {
-      mf.position = Math.min(Math.max(0, target - 1), mf.lastOffset)
+      a.position = Math.min(Math.max(0, target - 1), a.lastOffset)
     }
-    publishState(mf)
+    publishState(a)
     onSelectionChange()
     scheduleUpdateTextHints()
     return
   }
-  const textDeletion = handleTextDeletion(mf, event, target)
+  const textDeletion = handleTextDeletion(a, event, target)
   if (textDeletion === 'changed') {
-    publishState(mf)
+    publishState(a)
     syncCaretInText()
     scheduleUpdateTextHints()
   }
@@ -1112,19 +884,19 @@ function handleKeydown(event: KeyboardEvent) {
       // Backspace on the last remaining character of a `\sqrt[n]{...}` index
       // restores the index placeholder (a second Backspace then drops the index
       // via removeOptionalIndex, turning it into a plain root).
-      if (rootIndexAtomBeforeCaret(mf)) {
+      if (rootIndexAtomBeforeCaret(a)) {
         event.preventDefault()
         event.stopPropagation()
-        const pos = mf.position
-        mf.selection = { ranges: [[pos - 1, pos]] }
-        mf.insert('\\placeholder{}', {
+        const pos = a.position
+        a.selection = { ranges: [[pos - 1, pos]] }
+        a.insert('\\placeholder{}', {
           insertionMode: 'replaceSelection',
           selectionMode: 'placeholder',
           mode: 'math',
           format: 'latex',
           silenceNotifications: true,
         })
-        publishState(mf)
+        publishState(a)
         return
       }
     }
@@ -1132,7 +904,7 @@ function handleKeydown(event: KeyboardEvent) {
     // placeholders and removes any markers that became orphaned.
     return
   }
-  const result = unwrapElementAtCaret(mf)
+  const result = unwrapElementAtCaret(a)
   if (!result) {
     return
   }
@@ -1141,25 +913,14 @@ function handleKeydown(event: KeyboardEvent) {
   const publicCaretOffset = stripTextBoundaries(result.latex.slice(0, result.caretOffset)).length
   const restoredWithoutBoundaries = restoreEmptyGroupLatex(result.latex) ?? result.latex
   const restored = addTextBoundaries(restoredWithoutBoundaries)
-  mf.setValue(restored, { mode: 'math', silenceNotifications: true })
-  mf.position = publicStringOffsetToModel(mf, publicCaretOffset)
+  a.setValue(restored, { mode: 'math', silenceNotifications: true })
+  a.position = publicStringOffsetToModel(a, publicCaretOffset)
   if (restoredWithoutBoundaries !== result.latex) {
     // The unwrap left an empty slot behind (e.g. the argument of a root or a
     // script of an operator); move the caret into the restored placeholder.
-    enterPlaceholder(mf, mf.position)
+    a.enterPlaceholder(a.position)
   }
-  publishState(mf)
-}
-
-// Workaround for MathLive bug arnog/mathlive#2806/#2926: clicking a placeholder
-// inside an accent (hat, bar, vec, ...) does not move the caret into it. The
-// accent glyph overlays the placeholder box, so we detect the click by geometry
-// and drive the caret into the placeholder with the navigation commands. The
-// selection is only assigned after MathLive's own click/focus handling has
-// settled (rAF) and without any focus() call, both of which otherwise leave the
-// keyboard input state broken.
-function placeholderAtPoint(mf: MathfieldElement, x: number, y: number): boolean {
-  return placeholderIndexAtPoint(mf, x, y) >= 0
+  publishState(a)
 }
 
 // An accent construct (`\hat{...}`, `\bar{...}`, ...) located in the model. The
@@ -1173,8 +934,8 @@ interface AccentGroup {
   command: string
 }
 
-function accentGroupAtOffset(mf: MathfieldElement, offset: number): AccentGroup | null {
-  const latex = mf.getElementInfo(offset)?.latex
+function accentGroupAtOffset(a: EditorAdaptor, offset: number): AccentGroup | null {
+  const latex = a.getElementInfo(offset)?.latex
   if (!latex || !isAccentConstructLatex(latex)) {
     return null
   }
@@ -1187,9 +948,9 @@ function accentGroupAtOffset(mf: MathfieldElement, offset: number): AccentGroup 
   const runs: [number, number][] = []
   let i = offset - 1
   while (i >= 0) {
-    if ((mf.getElementInfo(i)?.latex ?? '') !== '') {
+    if ((a.getElementInfo(i)?.latex ?? '') !== '') {
       const end = i
-      while (i >= 0 && (mf.getElementInfo(i)?.latex ?? '') !== '') {
+      while (i >= 0 && (a.getElementInfo(i)?.latex ?? '') !== '') {
         i--
       }
       runs.push([i + 1, end])
@@ -1205,7 +966,7 @@ function accentGroupAtOffset(mf: MathfieldElement, offset: number): AccentGroup 
 }
 
 function accentBoundsAt(
-  mf: MathfieldElement,
+  a: EditorAdaptor,
   group: AccentGroup,
 ): { left: number; right: number; top: number; bottom: number } | null {
   let bounds: { left: number; right: number; top: number; bottom: number } | null = null
@@ -1222,29 +983,29 @@ function accentBoundsAt(
     bounds.top = Math.min(bounds.top, b.top)
     bounds.bottom = Math.max(bounds.bottom, b.bottom)
   }
-  merge(mf.getElementInfo(group.constructOffset)?.bounds)
+  merge(a.getElementInfo(group.constructOffset)?.bounds)
   for (let offset = group.start; offset <= group.end; offset++) {
-    merge(mf.getElementInfo(offset)?.bounds)
+    merge(a.getElementInfo(offset)?.bounds)
   }
   if (group.command === 'overbrace' || group.command === 'underbrace') {
     // Include the script run in the highlighted construct bounds.
     for (let offset = group.constructOffset - 1; offset > group.end; offset--) {
-      merge(mf.getElementInfo(offset)?.bounds)
+      merge(a.getElementInfo(offset)?.bounds)
     }
   }
   return bounds
 }
 
-function accentAtPoint(mf: MathfieldElement, x: number, y: number): AccentGroup | null {
-  if (braceAnnotationOffsetAtPoint(mf, x, y) != null) {
+function accentAtPoint(a: EditorAdaptor, x: number, y: number): AccentGroup | null {
+  if (braceAnnotationOffsetAtPoint(a, x, y) != null) {
     return null
   }
-  for (let offset = 0; offset <= mf.lastOffset; offset++) {
-    const group = accentGroupAtOffset(mf, offset)
+  for (let offset = 0; offset <= a.lastOffset; offset++) {
+    const group = accentGroupAtOffset(a, offset)
     if (!group) {
       continue
     }
-    const bounds = accentBoundsAt(mf, group)
+    const bounds = accentBoundsAt(a, group)
     if (
       bounds &&
       x >= bounds.left - 2 &&
@@ -1259,17 +1020,17 @@ function accentAtPoint(mf: MathfieldElement, x: number, y: number): AccentGroup 
 }
 
 function braceAnnotationOffsetAtPoint(
-  mf: MathfieldElement,
+  a: EditorAdaptor,
   x: number,
   y: number,
 ): number | null {
-  for (let constructOffset = 0; constructOffset <= mf.lastOffset; constructOffset++) {
-    const group = accentGroupAtOffset(mf, constructOffset)
+  for (let constructOffset = 0; constructOffset <= a.lastOffset; constructOffset++) {
+    const group = accentGroupAtOffset(a, constructOffset)
     if (!group || (group.command !== 'overbrace' && group.command !== 'underbrace')) {
       continue
     }
     for (let offset = group.end + 1; offset < group.constructOffset; offset++) {
-      const info = mf.getElementInfo(offset)
+      const info = a.getElementInfo(offset)
       if (PLACEHOLDER_LATEX_RE.test(info?.latex ?? '')) {
         continue
       }
@@ -1290,9 +1051,9 @@ function braceAnnotationOffsetAtPoint(
 }
 
 // The accent whose argument content atoms cover the given model offset.
-function accentGroupAtAtom(mf: MathfieldElement, atom: number): AccentGroup | null {
-  for (let offset = 0; offset <= mf.lastOffset; offset++) {
-    const group = accentGroupAtOffset(mf, offset)
+function accentGroupAtAtom(a: EditorAdaptor, atom: number): AccentGroup | null {
+  for (let offset = 0; offset <= a.lastOffset; offset++) {
+    const group = accentGroupAtOffset(a, offset)
     if (group && atom >= group.start && atom <= group.end) {
       return group
     }
@@ -1302,10 +1063,10 @@ function accentGroupAtAtom(mf: MathfieldElement, atom: number): AccentGroup | nu
 
 // The accent whose argument currently contains the caret (the caret sits inside
 // the argument's content, between the branch start and the construct atom).
-function accentGroupAtCaret(mf: MathfieldElement): AccentGroup | null {
-  const pos = mf.position
-  for (let offset = 0; offset <= mf.lastOffset; offset++) {
-    const group = accentGroupAtOffset(mf, offset)
+function accentGroupAtCaret(a: EditorAdaptor): AccentGroup | null {
+  const pos = a.position
+  for (let offset = 0; offset <= a.lastOffset; offset++) {
+    const group = accentGroupAtOffset(a, offset)
     if (group && pos >= group.start - 1 && pos <= group.end) {
       return group
     }
@@ -1316,22 +1077,16 @@ function accentGroupAtCaret(mf: MathfieldElement): AccentGroup | null {
 // An accent whose argument is still the empty placeholder is handled by the
 // placeholder click path (placeholderAtPoint -> enterPlaceholder), which selects
 // the placeholder; the accent path below only re-enters filled arguments.
-function isAccentArgEmpty(mf: MathfieldElement, group: AccentGroup): boolean {
+function isAccentArgEmpty(a: EditorAdaptor, group: AccentGroup): boolean {
   return (
     group.start === group.end &&
-    PLACEHOLDER_LATEX_RE.test(mf.getElementInfo(group.start)?.latex ?? '')
+    PLACEHOLDER_LATEX_RE.test(a.getElementInfo(group.start)?.latex ?? '')
   )
 }
 
-function reenterAccent(mf: MathfieldElement, group: AccentGroup): void {
-  if (document.activeElement !== mf) {
-    mf.focus()
-    if (document.activeElement !== mf) {
-      const keyboardSink = mf.shadowRoot?.querySelector<HTMLElement>('.ML__keyboard-sink')
-      keyboardSink?.focus()
-    }
-  }
-  mf.position = Math.min(group.end, mf.lastOffset)
+function reenterAccent(a: EditorAdaptor, group: AccentGroup): void {
+  a.focusKeyboard()
+  a.position = Math.min(group.end, a.lastOffset)
   onSelectionChange()
 }
 
@@ -1340,19 +1095,19 @@ function reenterAccent(mf: MathfieldElement, group: AccentGroup): void {
 // Step the caret one position at a time across the accent's extent (the branch
 // start immediately before the argument through the atom just after it) so the
 // argument is navigable like a Text box.
-function accentArrowTarget(mf: MathfieldElement, key: 'ArrowLeft' | 'ArrowRight'): number | null {
-  if (!mf.selectionIsCollapsed) {
+function accentArrowTarget(a: EditorAdaptor, key: 'ArrowLeft' | 'ArrowRight'): number | null {
+  if (!a.selectionIsCollapsed) {
     return null
   }
-  const pos = mf.position
-  for (let offset = 0; offset <= mf.lastOffset; offset++) {
-    const group = accentGroupAtOffset(mf, offset)
+  const pos = a.position
+  for (let offset = 0; offset <= a.lastOffset; offset++) {
+    const group = accentGroupAtOffset(a, offset)
     if (!group) {
       continue
     }
     const before = group.start - 2
     const after = group.end + 1
-    if (isAccentArgEmpty(mf, group)) {
+    if (isAccentArgEmpty(a, group)) {
       // The empty accent's interior is just the placeholder; a single arrow
       // press from either side selects it.
       if (key === 'ArrowRight' && pos === before) {
@@ -1374,27 +1129,23 @@ function accentArrowTarget(mf: MathfieldElement, key: 'ArrowLeft' | 'ArrowRight'
 }
 
 function onMfPointerDown(event: PointerEvent) {
-  const mf = getMf()
-  if (!mf) {
+  const a = getAdaptor()
+  if (!a) {
     return
   }
-  if (contextMenuController.handlePointerDown(mf, event)) return
+  if (contextMenuController.handlePointerDown(a, event)) return
   // Clicking an empty Text box: take over the click so the caret lands in
   // front of the gray "Text" word and the field really gets keyboard focus
   // (MathLive's own click handling lands on the invisible phantom atoms and
   // can leave the focus on the body).
-  const emptyGroup = emptyTextGroupAtPoint(mf, event.clientX, event.clientY)
+  const emptyGroup = emptyTextGroupAtPoint(a, event.clientX, event.clientY)
   if (emptyGroup) {
     event.preventDefault()
-    if (document.activeElement !== mf) {
-      mf.blur()
+    if (document.activeElement !== a.element) {
+      a.blur()
     }
-    mf.focus()
-    if (document.activeElement !== mf) {
-      const keyboardSink = mf.shadowRoot?.querySelector<HTMLElement>('.ML__keyboard-sink')
-      keyboardSink?.focus()
-    }
-    mf.position = Math.min(emptyGroup.start, mf.lastOffset)
+    a.focusKeyboard()
+    a.position = Math.min(emptyGroup.start, a.lastOffset)
     caretArrivedByNavigation = false
     onSelectionChange()
     return
@@ -1402,38 +1153,32 @@ function onMfPointerDown(event: PointerEvent) {
   // Clicking a filled accent (or the accent glyph over it): MathLive maps the
   // click to either side of the opaque construct, so take over the click and
   // park the caret inside the argument (at its end) instead.
-  const annotationOffset = braceAnnotationOffsetAtPoint(mf, event.clientX, event.clientY)
+  const annotationOffset = braceAnnotationOffsetAtPoint(a, event.clientX, event.clientY)
   if (annotationOffset != null) {
     event.preventDefault()
-    if (document.activeElement !== mf) {
-      mf.focus()
-      if (document.activeElement !== mf) {
-        const keyboardSink = mf.shadowRoot?.querySelector<HTMLElement>('.ML__keyboard-sink')
-        keyboardSink?.focus()
-      }
-    }
-    mf.position = annotationOffset
+    a.focusKeyboard()
+    a.position = annotationOffset
     caretArrivedByNavigation = false
     onSelectionChange()
     return
   }
-  const accent = accentAtPoint(mf, event.clientX, event.clientY)
+  const accent = accentAtPoint(a, event.clientX, event.clientY)
   if (
     accent &&
-    !isAccentArgEmpty(mf, accent) &&
-    !placeholderAtPoint(mf, event.clientX, event.clientY)
+    !isAccentArgEmpty(a, accent) &&
+    a.placeholderIndexAtPoint(event.clientX, event.clientY) < 0
   ) {
     event.preventDefault()
-    if (document.activeElement !== mf) {
-      mf.blur()
+    if (document.activeElement !== a.element) {
+      a.blur()
     }
-    reenterAccent(mf, accent)
+    reenterAccent(a, accent)
     caretArrivedByNavigation = false
     return
   }
   let contentRight = -Infinity
-  for (let offset = 0; offset <= mf.lastOffset; offset++) {
-    const bounds = mf.getElementInfo(offset)?.bounds
+  for (let offset = 0; offset <= a.lastOffset; offset++) {
+    const bounds = a.getElementInfo(offset)?.bounds
     if (bounds && bounds.width >= 0.5) {
       contentRight = Math.max(contentRight, bounds.right)
     }
@@ -1442,49 +1187,38 @@ function onMfPointerDown(event: PointerEvent) {
     return
   }
   event.preventDefault()
-  if (document.activeElement !== mf) {
-    mf.blur()
+  if (document.activeElement !== a.element) {
+    a.blur()
   }
-  mf.focus()
-  if (document.activeElement !== mf) {
-    // MathLive can retain a stale hasFocus() state and skip refocusing its sink.
-    const keyboardSink = mf.shadowRoot?.querySelector<HTMLElement>('.ML__keyboard-sink')
-    keyboardSink?.focus()
-  }
-  mf.position = mf.lastOffset
+  a.focusKeyboard()
+  a.position = a.lastOffset
   caretArrivedByNavigation = true
   onSelectionChange()
 }
 
 function onPointerUp(event: PointerEvent) {
-  const mf = getMf()
-  if (!mf) {
+  const a = getAdaptor()
+  if (!a) {
     return
   }
   // Clicking an empty Text box: MathLive's click handler can leave the caret
   // just outside the box (at the zero-width left marker) without moving the
   // keyboard focus. Snap the caret in front of the gray "Text" word and make
   // sure the field actually receives keyboard input.
-  const emptyGroup = emptyTextGroupAtPoint(mf, event.clientX, event.clientY)
+  const emptyGroup = emptyTextGroupAtPoint(a, event.clientX, event.clientY)
   if (emptyGroup) {
     const x = event.clientX
     const y = event.clientY
     requestAnimationFrame(() => {
-      if (disposed || getMf() !== mf) {
+      if (disposed || getAdaptor() !== a) {
         return
       }
-      const group = emptyTextGroupAtPoint(mf, x, y)
+      const group = emptyTextGroupAtPoint(a, x, y)
       if (!group) {
         return
       }
-      if (document.activeElement !== mf) {
-        mf.focus()
-        if (document.activeElement !== mf) {
-          const keyboardSink = mf.shadowRoot?.querySelector<HTMLElement>('.ML__keyboard-sink')
-          keyboardSink?.focus()
-        }
-      }
-      mf.position = Math.min(group.start, mf.lastOffset)
+      a.focusKeyboard()
+      a.position = Math.min(group.start, a.lastOffset)
       syncCaretInText()
       scheduleUpdateTextHints()
     })
@@ -1493,152 +1227,120 @@ function onPointerUp(event: PointerEvent) {
   // Clicking a filled accent: re-apply the caret inside its argument after
   // MathLive's click handling settles (it may still move the caret to either
   // side of the opaque construct).
-  const accent = accentAtPoint(mf, event.clientX, event.clientY)
+  const accent = accentAtPoint(a, event.clientX, event.clientY)
   if (
     accent &&
-    !isAccentArgEmpty(mf, accent) &&
-    !placeholderAtPoint(mf, event.clientX, event.clientY)
+    !isAccentArgEmpty(a, accent) &&
+    a.placeholderIndexAtPoint(event.clientX, event.clientY) < 0
   ) {
     const x = event.clientX
     const y = event.clientY
     requestAnimationFrame(() => {
-      if (disposed || getMf() !== mf) {
+      if (disposed || getAdaptor() !== a) {
         return
       }
-      const group = accentAtPoint(mf, x, y)
-      if (!group || isAccentArgEmpty(mf, group)) {
+      const group = accentAtPoint(a, x, y)
+      if (!group || isAccentArgEmpty(a, group)) {
         return
       }
-      reenterAccent(mf, group)
+      reenterAccent(a, group)
     })
     return
   }
-  if (!placeholderAtPoint(mf, event.clientX, event.clientY)) {
+  if (a.placeholderIndexAtPoint(event.clientX, event.clientY) < 0) {
     return
   }
-  if (!mf.selectionIsCollapsed) {
+  if (!a.selectionIsCollapsed) {
     // A working placeholder was already selected by MathLive itself.
     return
   }
-  let offset = mf.getOffsetFromPoint(event.clientX, event.clientY)
+  let offset = a.getOffsetFromPoint(event.clientX, event.clientY)
   if (!Number.isInteger(offset) || offset < 0) {
     // Clicking an accent glyph can map to no offset; fall back to the end so
     // the placeholder navigation below can still reach the placeholder.
-    offset = mf.lastOffset
+    offset = a.lastOffset
   }
-  const valueAtClick = mf.value
+  const valueAtClick = a.value
   requestAnimationFrame(() => {
-    if (mf.value !== valueAtClick) {
+    if (a.value !== valueAtClick) {
       return
     }
-    enterPlaceholder(mf, offset)
+    a.enterPlaceholder(offset)
     // MathLive's focus handling can settle asynchronously after the click and
     // revert the selection; re-apply once on the next frame (unless the user
     // already typed in the meantime).
     requestAnimationFrame(() => {
-      if (mf.value === valueAtClick) {
-        enterPlaceholder(mf, offset)
+      if (a.value === valueAtClick) {
+        a.enterPlaceholder(offset)
       }
     })
   })
 }
 
-function loadLatex(mf: MathfieldElement, value: string): void {
-  const internalValue = addTextBoundaries(value)
-  if (mf.value !== internalValue) {
-    mf.setValue(internalValue, { mode: 'math', silenceNotifications: true })
+function setLatex(value: string) {
+  const a = getAdaptor()
+  if (!a) {
+    return
   }
-  // Re-inject placeholders into empty groups so the loaded value shows the
-  // editable gray boxes again.
-  const restored = restoreEmptyGroupLatex(mf.value)
-  if (restored !== null && restored !== mf.value) {
-    mf.setValue(addTextBoundaries(restored), { mode: 'math', silenceNotifications: true })
-  }
-  ensureMathMode(mf)
-}
-
-function setLatex(value: string): { value: string; errors: string[] } {
-  const mf = getMf()
-  if (!mf) {
-    return { value, errors: [] }
-  }
-  loadLatex(mf, value)
-  publishState(mf)
+  a.loadPublicLatex(value)
+  publishState(a)
   scheduleUpdateTextHints()
-  return {
-    value: publicLatex(mf),
-    errors: formatLatexErrors(mf.errors ?? []),
-  }
 }
 
 function undo() {
-  const mf = getMf()
-  if (!mf) return
-  const entry = history.undo()
+  const a = getAdaptor()
+  if (!a) return
+  const entry = equationDocument.undo()
   if (!entry) return
-  loadLatex(mf, entry.latex)
-  mf.position = Math.min(entry.position, mf.lastOffset)
-  publishState(mf, false)
+  a.loadPublicLatex(entry.latex)
+  a.position = Math.min(entry.position, a.lastOffset)
+  publishState(a, false)
   scheduleUpdateTextHints()
 }
 
 function redo() {
-  const mf = getMf()
-  if (!mf) return
-  const entry = history.redo()
+  const a = getAdaptor()
+  if (!a) return
+  const entry = equationDocument.redo()
   if (!entry) return
-  loadLatex(mf, entry.latex)
-  mf.position = Math.min(entry.position, mf.lastOffset)
-  publishState(mf, false)
+  a.loadPublicLatex(entry.latex)
+  a.position = Math.min(entry.position, a.lastOffset)
+  publishState(a, false)
   scheduleUpdateTextHints()
 }
 
 function clear() {
-  const mf = getMf()
-  if (!mf) {
+  const a = getAdaptor()
+  if (!a) {
     return
   }
-  if (mf.value !== '') {
-    mf.value = ''
+  if (a.value !== '') {
+    a.value = ''
   }
-  ensureMathMode(mf)
-  publishState(mf)
+  a.ensureMathMode()
+  publishState(a)
   scheduleUpdateTextHints()
 }
 
 function focus() {
-  getMf()?.focus()
+  getAdaptor()?.focus()
 }
 
 function setFontSize(px: number) {
-  const mf = getMf()
-  if (mf) {
-    mf.style.fontSize = `${px}px`
-  }
+  getAdaptor()?.setFontSize(px)
   dragController.setFontSize(px)
   scheduleUpdateTextHints()
 }
 
 function setDisplayStyle(value: boolean) {
-  const mf = getMf()
-  if (mf) {
-    mf.defaultMode = value ? 'math' : 'inline-math'
-    // MathLive's option setter does not re-render existing content for a
-    // `defaultMode` change alone, so re-parse the current value to apply the
-    // new mathstyle (limits above/below vs. side sub/superscripts). Preserve
-    // the caret position across the round-trip.
-    const position = mf.position
-    mf.setValue(mf.value, { mode: 'math', silenceNotifications: true })
-    mf.position = Math.min(position, mf.lastOffset)
-    scheduleUpdateTextHints()
-  }
+  getAdaptor()?.setDisplayStyle(value)
   dragController.setDisplayStyle(value)
 }
 
 onMounted(() => {
   window.addEventListener('keydown', onWindowKeydown)
   document.addEventListener('click', autocompleteController.onSuggestionClick, true)
-  void ensureMathfield()
+  void ensureAdaptor()
 })
 
 onBeforeUnmount(() => {
@@ -1647,9 +1349,7 @@ onBeforeUnmount(() => {
   disposed = true
   dragController.dispose()
   cancelAnimationFrame(textHintRaf)
-  cancelAnimationFrame(fractionRaf)
-  fractionObserver?.disconnect()
-  fractionObserver = null
+  ;(getAdaptor() as MathLiveEditorAdaptor | null)?.dispose()
 })
 
 watch(() => props.fontSize, (px) => setFontSize(px))
@@ -1708,7 +1408,7 @@ defineExpose({
           autocapitalize="none"
           autocorrect="off"
           spellcheck="false"
-          @input="onMfInput($event.target as unknown as MathfieldElement)"
+          @input="onMfInput"
           @keydown.capture="onMfKeydown"
           @beforeinput.capture="onBeforeInput"
           @compositionstart.capture="onCompositionStart"
@@ -1716,7 +1416,7 @@ defineExpose({
           @compositionend.capture="onCompositionEnd"
           @pointerdown.capture="onMfPointerDown"
           @contextmenu.capture="onMfContextMenu"
-          @undo-state-change="onUndoStateChange($event.target as unknown as MathfieldElement)"
+          @undo-state-change="onUndoStateChange"
           @focus="requestEnglishIme(); syncPlaceholderSelected(); syncCaretInText(); scheduleUpdateTextHints()"
           @blur="restoreImeAfterBlur(); syncPlaceholderSelected(); syncCaretInText(); scheduleUpdateTextHints()"
           @focusin="syncCaretInText(); scheduleUpdateTextHints()"

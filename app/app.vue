@@ -36,19 +36,8 @@ function onInsert(element: EquationElement) {
   workspace.value?.insertElement(element)
 }
 
-function onLatexChange(value: string, errors: string[]) {
-  eq.setState(value, errors)
-}
-
-function onUndoState(canUndo: boolean, canRedo: boolean) {
-  eq.setUndoState(canUndo, canRedo)
-}
-
 function onApplyRawLatex(value: string) {
-  const result = workspace.value?.setLatex(value)
-  if (result) {
-    eq.setState(result.value, result.errors)
-  }
+  workspace.value?.setLatex(value)
 }
 
 function onFontSize(px: number) {
@@ -86,8 +75,6 @@ async function onCopy(kind: 'raw' | 'inline' | 'display') {
         ref="workspace"
         :font-size="eq.fontSize.value"
         :display-style="eq.displayStyle.value"
-        @latex-change="onLatexChange"
-        @undo-state="onUndoState"
         @toast="showToast"
       />
       <aside class="app-side">

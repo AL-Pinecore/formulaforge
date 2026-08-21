@@ -1,4 +1,4 @@
-import type { MathfieldElement } from 'mathlive'
+import type { EditorAdaptor } from './EditorAdaptor'
 import {
   mergeAdjacentTextCommands,
   removeOrphanedTextBoundaries,
@@ -9,11 +9,11 @@ export function normalizePublicLatex(latex: string): string {
   return mergeAdjacentTextCommands(stripTextBoundaries(removeOrphanedTextBoundaries(latex)))
 }
 
-export function publicStringOffsetToModel(mf: MathfieldElement, stringOffset: number): number {
+export function publicStringOffsetToModel(adaptor: EditorAdaptor, stringOffset: number): number {
   let bestOffset = 0
   let bestDistance = Infinity
-  for (let offset = 0; offset <= mf.lastOffset; offset++) {
-    const length = normalizePublicLatex(mf.getValue(0, offset)).length
+  for (let offset = 0; offset <= adaptor.lastOffset; offset++) {
+    const length = normalizePublicLatex(adaptor.getValue(0, offset)).length
     if (length > stringOffset) continue
     const distance = stringOffset - length
     if (distance < bestDistance) {

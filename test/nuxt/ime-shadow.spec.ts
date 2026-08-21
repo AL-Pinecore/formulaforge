@@ -6,7 +6,15 @@ class FakeMathField extends HTMLElement {
   value = ''
   placeholder = ''
   mathVirtualKeyboardPolicy = 'auto'
+  maxMatrixCols = 0
   defaultMode = 'math'
+  errors: unknown[] = []
+  position = 0
+  lastOffset = 0
+  mode = 'math'
+  menuItems: unknown[] = []
+  selection: { ranges: [number, number][] } = { ranges: [[0, 0]] }
+  selectionIsCollapsed = true
   inserted: string[] = []
   private listeners = new Map<string, EventListener>()
 
@@ -14,6 +22,8 @@ class FakeMathField extends HTMLElement {
     addEventListener: (type: string, listener: EventListener) => {
       this.listeners.set(type, listener)
     },
+    querySelector: () => null,
+    querySelectorAll: () => [],
   }
 
   override get shadowRoot() {
@@ -35,6 +45,28 @@ class FakeMathField extends HTMLElement {
   canRedo() {
     return false
   }
+
+  resetUndo() {}
+
+  getElementInfo() {
+    return undefined
+  }
+
+  hasFocus() {
+    return false
+  }
+
+  override focus() {}
+
+  override blur() {}
+
+  getOffsetFromPoint() {
+    return 0
+  }
+
+  applyStyle() {}
+
+  executeCommand() {}
 
   insert(text: string) {
     this.inserted.push(text)
@@ -63,7 +95,7 @@ describe('EquationWorkspace IME blocking (shadow root)', () => {
   async function mountConfigured(props: Record<string, unknown> = {}) {
     const wrapper = mount(EquationWorkspace, { props: { fontSize: 24, ...props } })
     await vi.waitFor(() => {
-      expect(wrapper.emitted('latex-change')).toBeTruthy()
+      expect((wrapper.find('math-field').element as FakeMathField).placeholder).toBeTruthy()
     })
     return wrapper
   }

@@ -4,9 +4,11 @@
 
 ## 涉及文件
 
-- `app/components/EquationWorkspace.vue` — 工作区组件（字段初始化、事件编排、插入回调、状态发布）
+- `app/components/EquationWorkspace.vue` — 工作区组件（后端初始化、事件编排、插入回调、状态发布）
+- `app/editor/EquationDocument.ts` — 正在编辑公式的拥有者（公共 LaTeX + 光标位置 + 语义历史 + 错误）
+- `app/editor/EditorAdaptor.ts` — 编辑后端接口与结构类型；编辑器功能只依赖它，不 `import` MathLive
+- `app/editor/MathLiveEditorAdaptor.ts` — `EditorAdaptor` 的 MathLive 实现，集中全部 workaround
 - `app/editor/EditorHistory.ts` — 公共 LaTeX + 光标位置的语义历史
-- `app/editor/MathLiveAdapter.ts` — 少量 MathLive 公共 API 兼容辅助
 - `app/editor/EditorLatex.ts` — 公共 LaTeX 规范化与字符串位置映射
 - `app/editor/SelectionController.ts` — caret 偏移与 placeholder 几何命中
 - `app/editor/TextController.ts` — Text 原子查询、输入/删除重建、空盒与字体样式
@@ -24,9 +26,9 @@
 
 ### 状态单例 `useEquation`
 
-`useEquation.ts` 在模块层持有 `ref`（`latex` / `errors` / `canUndo` / `canRedo` / `fontSize` / `displayStyle`），`useEquation()` 每次返回同一份引用。所有组件（工作区、工具栏、导出面板）共享同一状态，避免逐层传 props。
+`useEquation.ts` 在模块层持有 `ref`（`latex` / `errors` / `canUndo` / `canRedo` / `fontSize` / `displayStyle`），`useEquation()` 每次返回同一份引用。公式数据本身由 `EquationDocument` 单例拥有（公共 LaTeX + 光标 + `EditorHistory`），`useEquation` 只是订阅 document 变化的 Vue 响应式门面。工作区通过 `document.commit()` / `document.restore()` 把编辑结果写回 document，工具栏、源码面板、导出面板共享同一份响应式状态。
 
-工作区通过 `emit('latex-change', value, errors)` 和 `emit('undo-state', ...)` 把公式及 `EditorHistory` 的语义历史状态回灌给这个单例。
+编辑后端（MathLive）不再是数据源：它只渲染 document 交给它的公共 LaTeX，并在每次编辑后经 `EditorAdaptor.readPublicLatex()` / `readErrors()` 把结果读回。所有公式改动统一经过 `publishState()` 汇合点，落到 document。
 
 ### 语义 undo / redo
 
@@ -34,13 +36,15 @@ MathLive 的原生历史会记录 `setValue()`，但 Text 边界 marker、空盒
 
 历史只保存 `publicLatex()` 的结果，undo/redo 时再通过 `loadLatex()` 重建 marker、phantom 和 placeholder。这保证内部修复不会成为额外的撤销步骤，同时覆盖键盘输入/删除、面板点击与拖放、Text/Accent 重建、字体样式、矩阵增删、源码编辑、文件导入和清空。建立新快照会丢弃 redo 分支；工具栏及 `Cmd/Ctrl+Z`、`Cmd/Ctrl+Shift+Z`、`Ctrl+Y` 共用同一历史。
 
-### `<math-field>` 初始化
+### 编辑后端初始化
 
-`math-field` 是 MathLive 的自定义元素，在 `app/plugins/mathlive.client.ts` 里注册。工作区的初始化走 `ensureMathfield()`：
+`math-field` 是 MathLive 的自定义元素，在 `app/plugins/mathlive.client.ts` 里注册。工作区的初始化走 `ensureAdaptor()`：
 
 1. `await customElements.whenDefined('math-field')`；
 2. 轮询最多 20 次、每次 50ms，等 DOM 里的字段就绪（`element.canUndo` 存在）；
-3. `configureMathfield()` 设置 `placeholder`、`mathVirtualKeyboardPolicy`、`defaultMode`、`maxMatrixCols` 等，并注入 placeholder 样式、accent 修正、分数规则、IME 阻断。
+3. 用该元素构造 `MathLiveEditorAdaptor`，再调 `adaptor.configure()` 设置 `placeholder`、`mathVirtualKeyboardPolicy`、`defaultMode`、`maxMatrixCols` 等，并注入 placeholder 样式、accent 修正、分数规则与 shadow-root IME 阻断。
+
+这些 MathLive 专属行为全部收在 `MathLiveEditorAdaptor` 内；工作区与控制器只见 `EditorAdaptor` 接口。
 
 ### 元素定义与拖拽
 
@@ -70,7 +74,7 @@ mirror 与真实字段共用同一份 MathLive 渲染器，所以预览「像素
 
 ### 偏移计算 `offsetFromPoint`
 
-MathLive 的 `getOffsetFromPoint` 在上下标/分组下不可靠（很多位置返回 0）。`SelectionController` 的 `buildOffsetEdges` 遍历每个 offset 的 `getElementInfo(offset).bounds`，用每个原子的左右边缘构建 `OffsetEdge[]`，再按「距点击点最近、深度最大」选择偏移。
+MathLive 的 `getOffsetFromPoint` 在上下标/分组下不可靠（很多位置返回 0）。`MathLiveEditorAdaptor.offsetFromPoint` 遍历每个 offset 的 `getElementInfo(offset).bounds`，用每个原子的左右边缘构建 `OffsetEdge[]`，再按「距点击点最近、深度最大」选择偏移。该语义几何通过 `EditorAdaptor` 接口暴露，控制器不再接触 shadow root。
 
 ### 反斜杠命令输入
 
