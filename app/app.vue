@@ -45,7 +45,7 @@ function onFontSize(px: number) {
 }
 
 async function onCopy(kind: 'raw' | 'inline' | 'display') {
-  const latex = eq.latex.value
+  const latex = eq.exportLatex.value
   if (!latex.trim()) {
     showToast(t('toast.empty'), 'error')
     return
@@ -78,8 +78,8 @@ async function onCopy(kind: 'raw' | 'inline' | 'display') {
         @toast="showToast"
       />
       <aside class="app-side">
-        <LatexSource :latex="eq.latex.value" :errors="eq.errors.value" @apply="onApplyRawLatex" @toast="showToast" />
-        <ExportPanel :latex="eq.latex.value" @toast="showToast" />
+        <LatexSource :latex="eq.exportLatex.value" :errors="eq.errors.value" @apply="onApplyRawLatex" @toast="showToast" />
+        <ExportPanel :latex="eq.exportLatex.value" @toast="showToast" />
       </aside>
     </main>
     <Transition name="toast">

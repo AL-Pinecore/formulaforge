@@ -1,6 +1,8 @@
+import type { CaretBookmark } from './EditorAdaptor'
+
 export interface HistoryEntry {
   latex: string
-  position: number
+  caret: CaretBookmark
 }
 
 export class EditorHistory {

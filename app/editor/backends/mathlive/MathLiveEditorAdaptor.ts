@@ -1,26 +1,29 @@
 import type { LatexSyntaxError, MathfieldElement } from 'mathlive'
 import { restoreEmptyGroupLatex } from '~/utils/empty-group'
-import { blockImeBeforeInput, blockImeEvent, hasNonAsciiText } from '~/utils/ime-block'
-import { normalizePortableLatex } from '~/utils/latex-normalize'
-import { ensureAccentPositioning } from '~/utils/mathfield-accent'
-import { ensurePlaceholderSupport } from '~/utils/mathfield-placeholder'
 import {
   addTextBoundaries,
   stripEmptyTextSentinel,
   stripTextBoundaries,
 } from '~/utils/text-boundary'
 import type {
+  CaretBookmark,
+  ContextMenuHandlers,
   EditorAdaptor,
   EditorAdaptorConfig,
   EditorApplyStyleOptions,
   EditorElementInfo,
   EditorFontStyle,
   EditorInsertOptions,
-  EditorMenuItem,
+  EditorMatrixCommand,
   EditorMirrorConfig,
   EditorPreviewResult,
   EditorSelection,
-} from './EditorAdaptor'
+} from '../../EditorAdaptor'
+import { modelOffsetToPublicOffset, publicStringOffsetToModel } from '../../EditorLatex'
+import { ensureAccentPositioning } from './MathLiveAccentFix'
+import { MathLiveFractionFix } from './MathLiveFractionFix'
+import { attachImeBlocker } from './MathLiveIme'
+import { ensurePlaceholderSupport } from './MathLivePlaceholderFix'
 
 const PLACEHOLDER_GLYPH = '▢'
 const PLACEHOLDER_CLICK_PAD = 10
@@ -44,8 +47,6 @@ function formatLatexErrors(errors: readonly LatexSyntaxError[]): string[] {
 // workarounds — lives here, so no other editor code needs to know MathLive.
 export class MathLiveEditorAdaptor implements EditorAdaptor {
   private fontSize = 24
-  private fractionRaf = 0
-  private fractionObserver: MutationObserver | null = null
 
   private readonly offsetCache = new WeakMap<
     MathfieldElement,
@@ -54,9 +55,12 @@ export class MathLiveEditorAdaptor implements EditorAdaptor {
 
   constructor(element: HTMLElement) {
     this.mf = element as unknown as MathfieldElement
+    this.fraction = new MathLiveFractionFix(this.mf, () => this.fontSize)
   }
 
   private readonly mf: MathfieldElement
+  private readonly fraction: MathLiveFractionFix
+  private fractionFix = true
 
   get element(): HTMLElement {
     return this.mf
@@ -100,14 +104,6 @@ export class MathLiveEditorAdaptor implements EditorAdaptor {
 
   set mode(value: 'math' | 'text' | 'latex' | 'inline-math') {
     this.mf.mode = value as 'math' | 'text' | 'latex'
-  }
-
-  get menuItems(): readonly EditorMenuItem[] {
-    return (this.mf.menuItems ?? []) as unknown as EditorMenuItem[]
-  }
-
-  set menuItems(items: readonly EditorMenuItem[]) {
-    this.mf.menuItems = items as never
   }
 
   canUndo(): boolean {
@@ -154,8 +150,51 @@ export class MathLiveEditorAdaptor implements EditorAdaptor {
     this.mf.applyStyle(style, options as Parameters<MathfieldElement['applyStyle']>[1])
   }
 
-  executeCommand(command: string | string[]): boolean {
-    return this.mf.executeCommand(command as Parameters<MathfieldElement['executeCommand']>[0])
+  moveToPlaceholder(index: number): void {
+    this.mf.position = 0
+    for (let i = 0; i <= index && i < 64; i++) {
+      this.mf.executeCommand('moveToNextPlaceholder')
+    }
+  }
+
+  rejectCompletion(): void {
+    this.mf.executeCommand(['complete', 'reject'])
+  }
+
+  executeMatrixCommand(command: EditorMatrixCommand): void {
+    this.mf.executeCommand(command)
+  }
+
+  configureContextMenu(handlers: ContextMenuHandlers): void {
+    const MATRIX_MENU_COMMANDS: Record<string, EditorMatrixCommand> = {
+      'add-row-above': 'addRowBefore',
+      'add-row-below': 'addRowAfter',
+      'add-column-before': 'addColumnBefore',
+      'add-column-after': 'addColumnAfter',
+      'delete-row': 'removeRow',
+      'delete-column': 'removeColumn',
+    }
+    this.mf.menuItems = [
+      ...(this.mf.menuItems ?? []).map((item) => {
+        const id = 'id' in item && item.id ? item.id : undefined
+        const command = id ? MATRIX_MENU_COMMANDS[id] : undefined
+        if (!command) return item
+        const rowCommand =
+          command === 'addRowBefore' || command === 'addRowAfter' || command === 'removeRow'
+        return {
+          ...item,
+          ...(rowCommand ? { visible: () => handlers.matrixVisible() } : {}),
+          onMenuSelect: () => handlers.matrixSelect(command),
+        }
+      }),
+      { type: 'divider' },
+      {
+        id: 'unwrap-element',
+        label: handlers.unwrapLabel(),
+        visible: () => handlers.unwrapVisible(),
+        onMenuSelect: () => handlers.unwrapSelect(),
+      },
+    ] as never
   }
 
   getElementInfo(offset: number): EditorElementInfo | undefined {
@@ -184,8 +223,17 @@ export class MathLiveEditorAdaptor implements EditorAdaptor {
     return this.mf.getOffsetFromPoint(x, y)
   }
 
+  getCaret(): CaretBookmark {
+    return { latexOffset: modelOffsetToPublicOffset(this, this.mf.position) }
+  }
+
+  setCaret(caret: CaretBookmark): void {
+    this.mf.position = publicStringOffsetToModel(this, caret.latexOffset)
+  }
+
   configure(config: EditorAdaptorConfig): void {
     this.fontSize = config.fontSize
+    this.fractionFix = config.fractionFix ?? true
     this.mf.placeholder = config.placeholder
     this.mf.mathVirtualKeyboardPolicy = 'manual'
     this.mf.maxMatrixCols = config.maxMatrixCols
@@ -197,15 +245,15 @@ export class MathLiveEditorAdaptor implements EditorAdaptor {
     }
     ensurePlaceholderSupport(this.mf)
     ensureAccentPositioning(this.mf)
-    this.observeFractionRendering()
-    this.attachImeBlocker()
+    if (this.fractionFix) this.fraction.observe()
+    attachImeBlocker(this.mf)
   }
 
   ensureMathMode(): void {
     if (this.mf.value === '' && this.mf.mode === 'text') this.mf.mode = 'math'
   }
 
-  loadPublicLatex(latex: string): void {
+  loadEditorLatex(latex: string): void {
     const internalValue = addTextBoundaries(latex)
     if (this.mf.value !== internalValue) {
       this.mf.setValue(internalValue, { mode: 'math', silenceNotifications: true })
@@ -217,13 +265,14 @@ export class MathLiveEditorAdaptor implements EditorAdaptor {
     this.ensureMathMode()
   }
 
-  readPublicLatex(): string {
-    return normalizePortableLatex(
-      stripEmptyTextSentinel(
-        stripTextBoundaries(this.mf.getValue('latex-without-placeholders')).replace(
-          /\\placeholder(?:\[[^\]]*\])?\{\}/g,
-          '',
-        ),
+  // The canonical editor LaTeX: backend-specific command names (`\exponentialE`,
+  // `\longleftarrow`, …) are preserved so FormulaForge keeps its own formula.
+  // Portable normalization is a separate concern applied at the export boundary.
+  readEditorLatex(): string {
+    return stripEmptyTextSentinel(
+      stripTextBoundaries(this.mf.getValue('latex-without-placeholders')).replace(
+        /\\placeholder(?:\[[^\]]*\])?\{\}/g,
+        '',
       ),
     )
   }
@@ -404,129 +453,10 @@ export class MathLiveEditorAdaptor implements EditorAdaptor {
   // -- Fraction rule rendering workaround ----------------------------------
 
   scheduleFractionRules(): void {
-    cancelAnimationFrame(this.fractionRaf)
-    this.fractionRaf = requestAnimationFrame(() => this.positionFractionRules())
-  }
-
-  private includePaintedRect(
-    bounds: { top: number; bottom: number },
-    rect: { top: number; bottom: number },
-  ): void {
-    bounds.top = Math.min(bounds.top, rect.top)
-    bounds.bottom = Math.max(bounds.bottom, rect.bottom)
-  }
-
-  private paintedBounds(root: HTMLElement): { top: number; bottom: number } | null {
-    const context = document.createElement('canvas').getContext('2d')
-    if (!context) return null
-
-    const bounds = { top: Infinity, bottom: -Infinity }
-    for (const leaf of Array.from(root.querySelectorAll<HTMLElement>('span'))) {
-      const text = leaf.children.length === 0 ? leaf.textContent : null
-      if (!text || !text.trim() || leaf.classList.contains('ML__pstrut')) continue
-      const style = getComputedStyle(leaf)
-      const transparent = style.color.startsWith('rgba') && style.color.endsWith(', 0)')
-      if (style.visibility === 'hidden' || Number(style.opacity) === 0 || transparent) continue
-      const rect = leaf.getBoundingClientRect()
-      context.font = style.font
-      const metrics = context.measureText(text)
-      const fontAscent = metrics.fontBoundingBoxAscent
-      if (!Number.isFinite(fontAscent)) {
-        this.includePaintedRect(bounds, rect)
-        continue
-      }
-      const baseline = rect.top + fontAscent
-      this.includePaintedRect(bounds, {
-        top: baseline - metrics.actualBoundingBoxAscent,
-        bottom: baseline + metrics.actualBoundingBoxDescent,
-      })
-    }
-
-    for (const element of Array.from(
-      root.querySelectorAll<HTMLElement>('.ML__frac-line, .ML__sqrt-line, .ML__rule, .ml-placeholder, svg'),
-    )) {
-      const rect = element.getBoundingClientRect()
-      if (element.classList.contains('ML__frac-line')) {
-        const after = getComputedStyle(element, '::after')
-        const top = rect.top + (parseFloat(after.marginTop) || 0)
-        this.includePaintedRect(bounds, { top, bottom: top + (parseFloat(after.minHeight) || rect.height) })
-      } else {
-        this.includePaintedRect(bounds, rect)
-      }
-    }
-
-    return Number.isFinite(bounds.top) && Number.isFinite(bounds.bottom) ? bounds : null
-  }
-
-  private positionFractionRules(): void {
-    const root = this.mf.shadowRoot
-    if (!root || typeof root.querySelectorAll !== 'function') return
-    const lines = Array.from(root.querySelectorAll<HTMLElement>('.ML__frac-line'))
-    lines.sort((a, b) => {
-      const depth = (element: Element) => {
-        let result = 0
-        for (let parent = element.parentElement; parent; parent = parent.parentElement) result++
-        return result
-      }
-      return depth(b) - depth(a)
-    })
-    for (const lineEl of lines) {
-      const lineRow = lineEl.parentElement
-      const denominatorRow = lineRow?.previousElementSibling as HTMLElement | null
-      const numeratorRow = lineRow?.nextElementSibling as HTMLElement | null
-      if (!lineRow || !numeratorRow || !denominatorRow) continue
-      const numerator = this.paintedBounds(numeratorRow)
-      const denominator = this.paintedBounds(denominatorRow)
-      if (!numerator || !denominator) continue
-      const currentShift =
-        parseFloat(lineRow.style.transform.match(/translateY\(([-\d.eE+]+)px\)/)?.[1] ?? '0') || 0
-      const lineRect = lineEl.getBoundingClientRect()
-      const after = getComputedStyle(lineEl, '::after')
-      const lineTop = lineRect.top - currentShift + (parseFloat(after.marginTop) || 0)
-      const lineBottom = lineTop + (parseFloat(after.minHeight) || lineRect.height)
-      const shift = ((denominator.top - lineBottom) - (lineTop - numerator.bottom)) / 2
-      const limit = (parseFloat(getComputedStyle(lineRow).fontSize) || this.fontSize) * 0.25
-      const nextShift = Math.max(-limit, Math.min(limit, shift))
-      if (Math.abs(nextShift - currentShift) > 0.01) {
-        lineRow.style.transform = `translateY(${nextShift}px)`
-      }
-    }
-  }
-
-  private observeFractionRendering(): void {
-    const shadow = this.mf.shadowRoot
-    if (!shadow || this.fractionObserver || typeof ShadowRoot === 'undefined' || !(shadow instanceof ShadowRoot)) {
-      return
-    }
-    this.fractionObserver = new MutationObserver(() => {
-      this.positionFractionRules()
-    })
-    this.fractionObserver.observe(shadow, { childList: true, subtree: true })
-  }
-
-  // -- IME blocking workaround ---------------------------------------------
-
-  private attachImeBlocker(): void {
-    const root = this.mf.shadowRoot
-    if (!root || typeof root.addEventListener !== 'function') return
-    root.addEventListener('compositionstart', blockImeEvent, true)
-    root.addEventListener('compositionupdate', blockImeEvent, true)
-    root.addEventListener('compositionend', blockImeEvent, true)
-    root.addEventListener('beforeinput', blockImeBeforeInput, true)
-    root.addEventListener(
-      'input',
-      (event) => {
-        if (hasNonAsciiText((event as InputEvent).data)) {
-          blockImeEvent(event)
-        }
-      },
-      true,
-    )
+    if (this.fractionFix) this.fraction.schedule()
   }
 
   dispose(): void {
-    cancelAnimationFrame(this.fractionRaf)
-    this.fractionObserver?.disconnect()
-    this.fractionObserver = null
+    this.fraction.dispose()
   }
 }

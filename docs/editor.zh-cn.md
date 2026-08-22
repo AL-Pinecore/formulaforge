@@ -7,7 +7,7 @@
 - `app/components/EquationWorkspace.vue` — 工作区组件（后端初始化、事件编排、插入回调、状态发布）
 - `app/editor/EquationDocument.ts` — 正在编辑公式的拥有者（公共 LaTeX + 光标位置 + 语义历史 + 错误）
 - `app/editor/EditorAdaptor.ts` — 编辑后端接口与结构类型；编辑器功能只依赖它，不 `import` MathLive
-- `app/editor/MathLiveEditorAdaptor.ts` — `EditorAdaptor` 的 MathLive 实现，集中全部 workaround
+- `app/editor/backends/mathlive/MathLiveEditorAdaptor.ts` — `EditorAdaptor` 的 MathLive 实现，集中全部 workaround
 - `app/editor/EditorHistory.ts` — 公共 LaTeX + 光标位置的语义历史
 - `app/editor/EditorLatex.ts` — 公共 LaTeX 规范化与字符串位置映射
 - `app/editor/SelectionController.ts` — caret 偏移与 placeholder 几何命中
@@ -28,7 +28,7 @@
 
 `useEquation.ts` 在模块层持有 `ref`（`latex` / `errors` / `canUndo` / `canRedo` / `fontSize` / `displayStyle`），`useEquation()` 每次返回同一份引用。公式数据本身由 `EquationDocument` 单例拥有（公共 LaTeX + 光标 + `EditorHistory`），`useEquation` 只是订阅 document 变化的 Vue 响应式门面。工作区通过 `document.commit()` / `document.restore()` 把编辑结果写回 document，工具栏、源码面板、导出面板共享同一份响应式状态。
 
-编辑后端（MathLive）不再是数据源：它只渲染 document 交给它的公共 LaTeX，并在每次编辑后经 `EditorAdaptor.readPublicLatex()` / `readErrors()` 把结果读回。所有公式改动统一经过 `publishState()` 汇合点，落到 document。
+编辑后端（MathLive）不再是数据源：它只渲染 document 交给它的 editor LaTeX，并在每次编辑后经 `EditorAdaptor.readEditorLatex()` / `readErrors()` / `getCaret()` 把结果读回。所有公式改动统一经过 `publishState()` 汇合点，落到 document。
 
 ### 语义 undo / redo
 
@@ -83,7 +83,7 @@ MathLive 的 `getOffsetFromPoint` 在上下标/分组下不可靠（很多位置
 - `handleKeydown` 在 `latex` 模式下拦截 `Enter`/`Tab`，交给 `AutocompleteController.completeCommand`。
 - `AutocompleteController.trackKeydown` 从反斜杠开始维护本地命令缓冲；补全进行中不依赖会序列化为空串的 `mf.value`，也不读取 MathLive 内部 atom。
 - 命令 → 元素的映射在 `equation-elements.ts` 的 `getElementByCommand`：id 与命令名一致的元素优先（`\sqrt` → 平方根而非 n 次方根）；命令被多个元素共享且没有 id 匹配的（`\left`、`\begin`）不映射，交给原生补全。
-- 完成时先 `executeCommand(['complete', 'reject'])` 丢弃正在输入的命令、切回 math 模式，再复用 `insertElement` 插入——与拖拽完全一致（文本命令会得到空文本盒哨兵 + 边界 marker，其余得到占位符）。
+- 完成时先 `rejectCompletion()` 丢弃正在输入的命令、切回 math 模式，再复用 `insertElement` 插入——与拖拽完全一致（文本命令会得到空文本盒哨兵 + 边界 marker，其余得到占位符）。
 - 规范化后仍不被项目 MathJax 配置支持的候选项，在键盘确认和鼠标点选时都会被丢弃；完整清单及判定规则见[反斜杠补全兼容性禁用表](latex-autocomplete-compatibility.zh-cn.md)。
 - 两类命令特殊处理：
   - 样式切换 `\displaystyle`/`\textstyle`/`\scriptstyle`/`\scriptscriptstyle`：`completeStyleSwitch` 包裹光标后第一个元素（`firstElementRangeAfter` 算出其 caret 范围，脚本算在内），得到 `\displaystyle\sum`；后面没有内容时插入 `\displaystyle{□}` 占位符。

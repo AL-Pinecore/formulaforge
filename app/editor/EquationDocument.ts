@@ -1,15 +1,17 @@
 import { EditorHistory, type HistoryEntry } from './EditorHistory'
+import type { CaretBookmark } from './EditorAdaptor'
 
 type Listener = () => void
 
-// FormulaForge's own copy of the formula being edited: public LaTeX plus the
-// caret position and the semantic undo/redo history. The editing backend is
-// never the source of truth — it only renders the LaTeX this document hands it
-// and reports edits back. Plain class, no Vue, no backend dependency.
+// FormulaForge's own copy of the formula being edited: editor LaTeX plus the
+// caret bookmark (a public-LaTeX offset, never a backend model offset) and the
+// semantic undo/redo history. The editing backend is never the source of
+// truth — it only renders the LaTeX this document hands it and reports edits
+// back. Plain class, no Vue, no backend dependency.
 export class EquationDocument {
   private latexValue = ''
   private errorsValue: string[] = []
-  private positionValue = 0
+  private caretValue: CaretBookmark = { latexOffset: 0 }
   private readonly history = new EditorHistory()
   private readonly listeners = new Set<Listener>()
 
@@ -21,8 +23,8 @@ export class EquationDocument {
     return this.errorsValue
   }
 
-  get position(): number {
-    return this.positionValue
+  get caret(): CaretBookmark {
+    return this.caretValue
   }
 
   get canUndo(): boolean {
@@ -39,19 +41,19 @@ export class EquationDocument {
   }
 
   // Record an edit into history and publish the new state.
-  commit(latex: string, position: number, errors: string[]): void {
+  commit(latex: string, caret: CaretBookmark, errors: string[]): void {
     this.latexValue = latex
     this.errorsValue = errors
-    this.positionValue = position
-    this.history.record({ latex, position })
+    this.caretValue = caret
+    this.history.record({ latex, caret })
     this.notify()
   }
 
   // Publish state without creating a history entry (undo/redo round-trips).
-  restore(latex: string, position: number, errors: string[]): void {
+  restore(latex: string, caret: CaretBookmark, errors: string[]): void {
     this.latexValue = latex
     this.errorsValue = errors
-    this.positionValue = position
+    this.caretValue = caret
     this.notify()
   }
 

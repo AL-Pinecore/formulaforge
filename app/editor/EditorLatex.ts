@@ -9,6 +9,10 @@ export function normalizePublicLatex(latex: string): string {
   return mergeAdjacentTextCommands(stripTextBoundaries(removeOrphanedTextBoundaries(latex)))
 }
 
+export function modelOffsetToPublicOffset(adaptor: EditorAdaptor, offset: number): number {
+  return normalizePublicLatex(adaptor.getValue(0, offset)).length
+}
+
 export function publicStringOffsetToModel(adaptor: EditorAdaptor, stringOffset: number): number {
   let bestOffset = 0
   let bestDistance = Infinity

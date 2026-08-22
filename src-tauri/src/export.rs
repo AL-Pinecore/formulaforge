@@ -433,7 +433,7 @@ fn svg_to_raster(
 
 fn composite_over_white(rgba: &[u8]) -> Vec<u8> {
     let mut rgb = Vec::with_capacity(rgba.len() / 4 * 3);
-    for pixel in rgba.chunks_exact(4) {
+    for pixel in rgba.as_chunks::<4>().0 {
         let alpha = u32::from(pixel[3]);
         if alpha == 255 {
             rgb.extend_from_slice(&pixel[..3]);

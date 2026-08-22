@@ -87,7 +87,7 @@ app/                    # Nuxt frontend
   components/           # workspace, palette, toolbar, preview components
   composables/          # useEquation, useEquationExport
   data/                 # equation element definitions
-  editor/               # EquationDocument state owner, EditorAdaptor backend interface, controllers
+  editor/               # EquationDocument state owner, EditorAdaptor backend interface, controllers, backends/mathlive
   plugins/              # mathlive registration
   types/                # type definitions
   utils/                # SVG export, clipboard, empty-group restore helpers

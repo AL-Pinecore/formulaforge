@@ -1,5 +1,4 @@
-import type { EditorAdaptor } from './EditorAdaptor'
-import type { MatrixCommand } from '~/utils/matrix'
+import type { EditorAdaptor, EditorMatrixCommand } from './EditorAdaptor'
 import { unwrapCommandLatex } from '~/utils/unwrap-element'
 import {
   matrixContextAtCaret,
@@ -8,17 +7,6 @@ import {
 } from './MatrixController'
 import { normalizePublicLatex, publicStringOffsetToModel } from './EditorLatex'
 
-type ContextMatrixCommand = MatrixCommand | 'addColumnBefore' | 'addRowBefore'
-
-const MATRIX_MENU_COMMANDS: Record<string, ContextMatrixCommand> = {
-  'add-row-above': 'addRowBefore',
-  'add-row-below': 'addRowAfter',
-  'add-column-before': 'addColumnBefore',
-  'add-column-after': 'addColumnAfter',
-  'delete-row': 'removeRow',
-  'delete-column': 'removeColumn',
-}
-
 type UnwrapTarget = {
   range: [number, number]
   latex: string
@@ -26,7 +14,6 @@ type UnwrapTarget = {
 }
 
 type ContextMenuOptions = {
-  unwrapLabel: () => string
   restoreEmptyGroups: (mf: EditorAdaptor) => void
   publishState: (mf: EditorAdaptor) => void
   updateTextHints: () => void
@@ -39,27 +26,8 @@ export class ContextMenuController {
 
   constructor(private readonly options: ContextMenuOptions) {}
 
-  configure(mf: EditorAdaptor): void {
-    mf.menuItems = [
-      ...(mf.menuItems ?? []).map((item) => {
-        const command = 'id' in item && item.id ? MATRIX_MENU_COMMANDS[item.id] : undefined
-        if (!command) return item
-        const rowCommand =
-          command === 'addRowBefore' || command === 'addRowAfter' || command === 'removeRow'
-        return {
-          ...item,
-          ...(rowCommand ? { visible: () => matrixContextAtCaret(mf) !== null } : {}),
-          onMenuSelect: () => this.executeContextMatrixCommand(mf, command),
-        }
-      }),
-      { type: 'divider' },
-      {
-        id: 'unwrap-element',
-        label: this.options.unwrapLabel,
-        visible: () => this.unwrapTarget !== null,
-        onMenuSelect: () => this.unwrapContextTarget(mf),
-      },
-    ]
+  hasUnwrapTarget(): boolean {
+    return this.unwrapTarget !== null
   }
 
   handlePointerDown(mf: EditorAdaptor, event: PointerEvent): boolean {
@@ -102,11 +70,11 @@ export class ContextMenuController {
 
   executeMatrixCommands(
     mf: EditorAdaptor,
-    commands: readonly ContextMatrixCommand[],
+    commands: readonly EditorMatrixCommand[],
   ): void {
     mf.focus()
     for (const command of commands) {
-      mf.executeCommand(command)
+      mf.executeMatrixCommand(command)
       if (command !== 'addRowBefore' && command !== 'addRowAfter') continue
       const context = matrixContextAtCaret(mf)
       if (context?.matrix.environmentName !== 'aligned') continue
@@ -124,9 +92,9 @@ export class ContextMenuController {
     this.options.updateTextHints()
   }
 
-  private executeContextMatrixCommand(
+  executeContextMatrixCommand(
     mf: EditorAdaptor,
-    command: ContextMatrixCommand,
+    command: EditorMatrixCommand,
   ): void {
     const target = this.matrixTarget
     if (!target) return
@@ -135,7 +103,7 @@ export class ContextMenuController {
     this.executeMatrixCommands(mf, [command])
   }
 
-  private unwrapContextTarget(mf: EditorAdaptor): void {
+  unwrapContextTarget(mf: EditorAdaptor): void {
     const target = this.unwrapTarget
     if (!target) return
     const publicCaretOffset = normalizePublicLatex(target.latex.slice(0, target.caretOffset)).length

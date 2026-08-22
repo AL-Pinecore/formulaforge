@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { correctAccentPositioning } from '~/utils/mathfield-accent'
+import { correctAccentPositioning } from '~/editor/backends/mathlive/MathLiveAccentFix'
 
 const props = defineProps<{ latex: string }>()
 

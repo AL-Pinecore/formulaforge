@@ -4,7 +4,7 @@ import { restoreEmptyGroupLatex } from '~/utils/empty-group'
 import { blockImeBeforeInput, blockImeEvent } from '~/utils/ime-block'
 import { isAccentConstructLatex } from '~/utils/accent'
 import { isFontStyleElement } from '~/utils/font-styles'
-import { removeElementAtPlaceholder } from '~/utils/remove-empty-element'
+import { removeElementAtPlaceholder, type RemoveResult } from '~/utils/remove-empty-element'
 import { matrixCommandsForKey } from '~/utils/matrix'
 import {
   addTextBoundaries,
@@ -18,7 +18,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { isTauriRuntime } from '~/composables/useEquationExport'
 import { useEquation } from '~/composables/useEquation'
 import type { EditorAdaptor } from '~/editor/EditorAdaptor'
-import { MathLiveEditorAdaptor } from '~/editor/MathLiveEditorAdaptor'
+import { MathLiveEditorAdaptor } from '~/editor/backends/mathlive/MathLiveEditorAdaptor'
 import { DragController, type DragPreviewBox } from '~/editor/DragController'
 import { AutocompleteController } from '~/editor/AutocompleteController'
 import { ContextMenuController } from '~/editor/ContextMenuController'
@@ -42,9 +42,13 @@ import {
   type TextHint,
 } from '~/editor/TextController'
 
-const props = withDefaults(defineProps<{ fontSize: number; displayStyle?: boolean }>(), {
-  displayStyle: true,
-})
+const props = withDefaults(
+  defineProps<{ fontSize: number; displayStyle?: boolean; fractionFix?: boolean }>(),
+  {
+    displayStyle: true,
+    fractionFix: false,
+  },
+)
 
 const emit = defineEmits<{
   toast: [message: string, kind: 'success' | 'error']
@@ -103,21 +107,30 @@ const autocompleteController = new AutocompleteController({
 })
 
 const contextMenuController = new ContextMenuController({
-  unwrapLabel: () => t('workspace.unwrap'),
   restoreEmptyGroups,
   publishState,
   updateTextHints: scheduleUpdateTextHints,
   selectionChanged: onSelectionChange,
 })
 
+function configureContextMenu(a: EditorAdaptor) {
+  a.configureContextMenu({
+    matrixVisible: () => matrixContextAtCaret(a) !== null,
+    matrixSelect: (command) => contextMenuController.executeContextMatrixCommand(a, command),
+    unwrapLabel: () => t('workspace.unwrap'),
+    unwrapVisible: () => contextMenuController.hasUnwrapTarget(),
+    unwrapSelect: () => contextMenuController.unwrapContextTarget(a),
+  })
+}
+
 function publishState(a?: EditorAdaptor, record = true) {
   const target = a ?? getAdaptor()
   if (!target) return
   target.resetUndo()
-  const latex = target.readPublicLatex()
+  const latex = target.readEditorLatex()
   const errors = target.readErrors()
-  if (record) equationDocument.commit(latex, target.position, errors)
-  else equationDocument.restore(latex, target.position, errors)
+  if (record) equationDocument.commit(latex, target.getCaret(), errors)
+  else equationDocument.restore(latex, target.getCaret(), errors)
 }
 
 function updateTextHints() {
@@ -305,8 +318,9 @@ function configureAdaptor(a: EditorAdaptor) {
     maxMatrixCols: MAX_MATRIX_COLUMNS,
     fontSize: props.fontSize,
     displayStyle: props.displayStyle,
+    fractionFix: props.fractionFix,
   })
-  contextMenuController.configure(a)
+  configureContextMenu(a)
   publishState(a)
 }
 
@@ -439,10 +453,7 @@ function scheduleRestorePlaceholders(a: EditorAdaptor) {
 }
 
 function moveToPlaceholder(a: EditorAdaptor, index: number) {
-  a.position = 0
-  for (let i = 0; i <= index && i < 64; i++) {
-    a.executeCommand('moveToNextPlaceholder')
-  }
+  a.moveToPlaceholder(index)
 }
 
 function restoreEmptyGroups(a: EditorAdaptor) {
@@ -472,15 +483,15 @@ function restoreEmptyGroups(a: EditorAdaptor) {
 
 const CARET_MARKER = '\\bigstar'
 
-// Locate the placeholder under the caret in the serialized LaTeX. Model
-// offsets do not map reliably to string offsets inside operator branches
-// (a sum's scripts serialize in the opposite order of the model, so counting
-// placeholder atoms before the caret lands on the wrong token). Instead the
-// caret's placeholder is briefly replaced by a unique marker, located in the
-// serialized value, and the original value is restored immediately. Undo
-// Native recording stays disabled; the semantic history never sees this round-trip.
-function unwrapElementAtCaret(a: EditorAdaptor): { latex: string; caretOffset: number } | null {
+// Locate the caret in the serialized LaTeX by briefly swapping in a unique
+// marker, then restoring the original value. Model offsets do not map reliably
+// to string offsets inside operator branches (a sum's scripts serialize in the
+// opposite order of the model), so this round-trip is the only stable way to
+// get the caret's string position. Undo recording stays disabled; the semantic
+// history never sees this round-trip.
+function markerRoundTrip(a: EditorAdaptor): { marked: string; markerIndex: number } | null {
   const original = a.value
+  const originalPosition = a.position
   let marked = ''
   try {
     a.insert(CARET_MARKER, {
@@ -495,13 +506,70 @@ function unwrapElementAtCaret(a: EditorAdaptor): { latex: string; caretOffset: n
   } finally {
     a.setValue(original, { mode: 'math', silenceNotifications: true })
     a.resetUndo()
+    // Restore the caret so a declined removal can still fall through to
+    // native deletion at the same position.
+    a.position = Math.min(originalPosition, a.lastOffset)
   }
   const markerIndex = marked.indexOf(CARET_MARKER)
   if (markerIndex < 0 || marked.indexOf(CARET_MARKER, markerIndex + 1) >= 0) {
     return null
   }
-  const latex = marked.replace(CARET_MARKER, '\\placeholder{}')
-  return removeElementAtPlaceholder(latex, markerIndex + '\\placeholder{}'.length)
+  return { marked, markerIndex }
+}
+
+function unwrapElementAtCaret(a: EditorAdaptor): RemoveResult | null {
+  const roundTrip = markerRoundTrip(a)
+  if (!roundTrip) return null
+  const latex = roundTrip.marked.replace(CARET_MARKER, '\\placeholder{}')
+  return removeElementAtPlaceholder(latex, roundTrip.markerIndex + '\\placeholder{}'.length)
+}
+
+// The caret sits immediately after a construct (e.g. `\sum_{}^{}`) rather than
+// on one of its placeholders. Backspace should remove the whole construct, so
+// point the caret at its trailing placeholder and unwrap it. The removal is
+// only accepted when the removed span ends exactly at the caret (so a
+// placeholder further back in the formula is never mistaken for the one
+// adjacent to the caret).
+function removeElementBeforeCaret(a: EditorAdaptor): RemoveResult | null {
+  const roundTrip = markerRoundTrip(a)
+  if (!roundTrip) return null
+  const latex = roundTrip.marked.replace(CARET_MARKER, '')
+  const markerIndex = roundTrip.markerIndex
+  const lastPlaceholder = latex.lastIndexOf('\\placeholder{}', markerIndex - 1)
+  if (lastPlaceholder < 0) return null
+  const result = removeElementAtPlaceholder(latex, lastPlaceholder + '\\placeholder{}'.length)
+  if (!result) return null
+  const removedEnd = result.caretOffset + (latex.length - result.latex.length)
+  return removedEnd === markerIndex ? result : null
+}
+
+// Symmetric to the above: the caret sits immediately before a construct and
+// Delete should remove it. The construct must start exactly at the caret, so
+// only accept a removal whose `caretOffset` is the caret's own string offset.
+function removeElementAfterCaret(a: EditorAdaptor): RemoveResult | null {
+  const roundTrip = markerRoundTrip(a)
+  if (!roundTrip) return null
+  const latex = roundTrip.marked.replace(CARET_MARKER, '')
+  const firstPlaceholder = latex.indexOf('\\placeholder{}', roundTrip.markerIndex)
+  if (firstPlaceholder < 0) return null
+  const result = removeElementAtPlaceholder(latex, firstPlaceholder + '\\placeholder{}'.length)
+  return result && result.caretOffset === roundTrip.markerIndex ? result : null
+}
+
+// Apply a computed removal: re-inject placeholders into any emptied groups,
+// restore the caret at the removal point, and publish the new state.
+function applyRemoval(a: EditorAdaptor, result: RemoveResult): void {
+  const publicCaretOffset = stripTextBoundaries(result.latex.slice(0, result.caretOffset)).length
+  const restoredWithoutBoundaries = restoreEmptyGroupLatex(result.latex) ?? result.latex
+  const restored = addTextBoundaries(restoredWithoutBoundaries)
+  a.setValue(restored, { mode: 'math', silenceNotifications: true })
+  a.position = publicStringOffsetToModel(a, publicCaretOffset)
+  if (restoredWithoutBoundaries !== result.latex) {
+    // The removal left an empty slot behind (e.g. the argument of a root or a
+    // script of an operator); move the caret into the restored placeholder.
+    a.enterPlaceholder(a.position)
+  }
+  publishState(a)
 }
 
 // True when the caret sits just after a single non-placeholder atom inside a
@@ -899,6 +967,25 @@ function handleKeydown(event: KeyboardEvent) {
         publishState(a)
         return
       }
+      // The caret sits right after a whole construct (e.g. `\sum_{}^{}`) whose
+      // slots are all empty; Backspace removes it instead of relying on
+      // MathLive's native deletion, which the empty placeholders defeat.
+      const before = removeElementBeforeCaret(a)
+      if (before) {
+        event.preventDefault()
+        event.stopPropagation()
+        applyRemoval(a, before)
+        return
+      }
+    } else {
+      // Symmetric: caret right before a whole empty construct, Delete removes it.
+      const after = removeElementAfterCaret(a)
+      if (after) {
+        event.preventDefault()
+        event.stopPropagation()
+        applyRemoval(a, after)
+        return
+      }
     }
     // Let MathLive delete the content; the input handler re-injects
     // placeholders and removes any markers that became orphaned.
@@ -910,17 +997,7 @@ function handleKeydown(event: KeyboardEvent) {
   }
   event.preventDefault()
   event.stopPropagation()
-  const publicCaretOffset = stripTextBoundaries(result.latex.slice(0, result.caretOffset)).length
-  const restoredWithoutBoundaries = restoreEmptyGroupLatex(result.latex) ?? result.latex
-  const restored = addTextBoundaries(restoredWithoutBoundaries)
-  a.setValue(restored, { mode: 'math', silenceNotifications: true })
-  a.position = publicStringOffsetToModel(a, publicCaretOffset)
-  if (restoredWithoutBoundaries !== result.latex) {
-    // The unwrap left an empty slot behind (e.g. the argument of a root or a
-    // script of an operator); move the caret into the restored placeholder.
-    a.enterPlaceholder(a.position)
-  }
-  publishState(a)
+  applyRemoval(a, result)
 }
 
 // An accent construct (`\hat{...}`, `\bar{...}`, ...) located in the model. The
@@ -1282,7 +1359,7 @@ function setLatex(value: string) {
   if (!a) {
     return
   }
-  a.loadPublicLatex(value)
+  a.loadEditorLatex(value)
   publishState(a)
   scheduleUpdateTextHints()
 }
@@ -1292,8 +1369,8 @@ function undo() {
   if (!a) return
   const entry = equationDocument.undo()
   if (!entry) return
-  a.loadPublicLatex(entry.latex)
-  a.position = Math.min(entry.position, a.lastOffset)
+  a.loadEditorLatex(entry.latex)
+  a.setCaret(entry.caret)
   publishState(a, false)
   scheduleUpdateTextHints()
 }
@@ -1303,8 +1380,8 @@ function redo() {
   if (!a) return
   const entry = equationDocument.redo()
   if (!entry) return
-  a.loadPublicLatex(entry.latex)
-  a.position = Math.min(entry.position, a.lastOffset)
+  a.loadEditorLatex(entry.latex)
+  a.setCaret(entry.caret)
   publishState(a, false)
   scheduleUpdateTextHints()
 }
@@ -1349,7 +1426,7 @@ onBeforeUnmount(() => {
   disposed = true
   dragController.dispose()
   cancelAnimationFrame(textHintRaf)
-  ;(getAdaptor() as MathLiveEditorAdaptor | null)?.dispose()
+  getAdaptor()?.dispose()
 })
 
 watch(() => props.fontSize, (px) => setFontSize(px))

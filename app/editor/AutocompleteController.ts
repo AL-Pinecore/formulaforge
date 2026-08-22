@@ -74,7 +74,7 @@ export class AutocompleteController {
     if (!name || !DISABLED_LATEX_AUTOCOMPLETE_COMMANDS.has(name) || adaptor?.mode !== 'latex') return
     event.preventDefault()
     event.stopImmediatePropagation()
-    adaptor.executeCommand(['complete', 'reject'])
+    adaptor.rejectCompletion()
     if (adaptor.value === '') adaptor.mode = 'math'
     this.reset()
   }
@@ -82,7 +82,7 @@ export class AutocompleteController {
   private rejectNativeCompletion(adaptor: EditorAdaptor, event: Event): void {
     event.preventDefault()
     event.stopPropagation()
-    adaptor.executeCommand(['complete', 'reject'])
+    adaptor.rejectCompletion()
     if (adaptor.value === '') adaptor.mode = 'math'
     this.reset()
   }

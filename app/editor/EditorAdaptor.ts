@@ -24,6 +24,12 @@ export interface EditorElementInfo {
 
 export type EditorRange = [start: number, end: number]
 
+// FormulaForge's own caret position, expressed as an offset into the public
+// (editor) LaTeX string — never a backend model offset.
+export interface CaretBookmark {
+  latexOffset: number
+}
+
 export interface EditorSelection {
   ranges: EditorRange[]
   direction?: 'forward' | 'backward' | 'none'
@@ -55,13 +61,20 @@ export interface EditorApplyStyleOptions {
 
 // Loose structural view of a context-menu item. Only the fields the editor
 // features touch are typed; unknown backend fields pass through untouched.
-export interface EditorMenuItem {
-  type?: string
-  id?: string
-  label?: string | (() => string)
-  visible?: boolean | (() => boolean)
-  onMenuSelect?: () => void
-  [key: string]: unknown
+export type EditorMatrixCommand =
+  | 'addColumnBefore'
+  | 'addColumnAfter'
+  | 'addRowBefore'
+  | 'addRowAfter'
+  | 'removeColumn'
+  | 'removeRow'
+
+export interface ContextMenuHandlers {
+  matrixVisible: () => boolean
+  matrixSelect: (command: EditorMatrixCommand) => void
+  unwrapLabel: () => string
+  unwrapVisible: () => boolean
+  unwrapSelect: () => void
 }
 
 export interface EditorPreviewBox {
@@ -86,6 +99,8 @@ export interface EditorAdaptorConfig {
   maxMatrixCols: number
   fontSize: number
   displayStyle: boolean
+  // Enable the fraction-rule rendering correction (defaults to true).
+  fractionFix?: boolean
 }
 
 export interface EditorAdaptor {
@@ -100,7 +115,6 @@ export interface EditorAdaptor {
   selection: EditorSelection | null
   readonly selectionIsCollapsed: boolean
   mode: EditorMode
-  menuItems: readonly EditorMenuItem[]
 
   canUndo(): boolean
   resetUndo(): void
@@ -113,15 +127,20 @@ export interface EditorAdaptor {
   setValue(latex: string, options?: EditorInsertOptions): void
   insert(latex: string, options?: EditorInsertOptions): void
   applyStyle(style: EditorFontStyle, options?: EditorApplyStyleOptions): void
-  executeCommand(command: string | string[]): boolean
+  moveToPlaceholder(index: number): void
+  rejectCompletion(): void
+  executeMatrixCommand(command: EditorMatrixCommand): void
+  configureContextMenu(handlers: ContextMenuHandlers): void
   getElementInfo(offset: number): EditorElementInfo | undefined
   getOffsetFromPoint(x: number, y: number): number
+  getCaret(): CaretBookmark
+  setCaret(caret: CaretBookmark): void
 
-  // Backend setup + public-LaTeX exchange boundary.
+  // Backend setup + editor-LaTeX exchange boundary.
   configure(config: EditorAdaptorConfig): void
   ensureMathMode(): void
-  loadPublicLatex(latex: string): void
-  readPublicLatex(): string
+  loadEditorLatex(latex: string): void
+  readEditorLatex(): string
   readErrors(): string[]
   setFontSize(px: number): void
   setDisplayStyle(display: boolean): void
@@ -141,4 +160,5 @@ export interface EditorAdaptor {
 
   // Backend render workarounds.
   scheduleFractionRules(): void
+  dispose(): void
 }

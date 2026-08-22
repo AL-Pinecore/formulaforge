@@ -1,5 +1,6 @@
 import { computed, ref } from 'vue'
 import { EquationDocument } from '~/editor/EquationDocument'
+import { normalizePortableLatex } from '~/utils/latex-normalize'
 
 // The single document owns the formula being edited (public LaTeX, caret,
 // errors, undo/redo history). These refs mirror it reactively for the UI; the
@@ -23,6 +24,7 @@ document.subscribe(() => {
 export function useEquation() {
   return {
     latex: computed(() => latex.value),
+    exportLatex: computed(() => normalizePortableLatex(latex.value)),
     errors: computed(() => errors.value),
     canUndo,
     canRedo,

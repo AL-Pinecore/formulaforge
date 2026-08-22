@@ -2379,6 +2379,36 @@ test('backspace removes an integral when only its placeholders remain', async ({
   await expect(textarea).toHaveValue('', { timeout: 10000 })
 })
 
+test('backspace after a sum removes the whole element', async ({ page, goto }) => {
+  await goto('/', { waitUntil: 'hydration' })
+  await insertElement(page, 'Sum', 'Sums & Integrals')
+  const textarea = page.locator('.latex-textarea')
+  await expect(textarea).toHaveValue(/\\sum/, { timeout: 10000 })
+  await page.waitForTimeout(50)
+  await page.locator('math-field').evaluate((el) => {
+    const mf = el as unknown as { focus(): void; lastOffset: number; position: number }
+    mf.focus()
+    mf.position = mf.lastOffset
+  })
+  await page.keyboard.press('Backspace')
+  await expect(textarea).toHaveValue('', { timeout: 10000 })
+})
+
+test('delete before a sum removes the whole element', async ({ page, goto }) => {
+  await goto('/', { waitUntil: 'hydration' })
+  await insertElement(page, 'Sum', 'Sums & Integrals')
+  const textarea = page.locator('.latex-textarea')
+  await expect(textarea).toHaveValue(/\\sum/, { timeout: 10000 })
+  await page.waitForTimeout(50)
+  await page.locator('math-field').evaluate((el) => {
+    const mf = el as unknown as { focus(): void; position: number }
+    mf.focus()
+    mf.position = 0
+  })
+  await page.keyboard.press('Delete')
+  await expect(textarea).toHaveValue('', { timeout: 10000 })
+})
+
 test('drag preview keeps the insertion point near the target atom', async ({ page, goto }) => {
   await goto('/', { waitUntil: 'hydration' })
   const textarea = page.locator('.latex-textarea')
