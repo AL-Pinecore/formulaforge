@@ -64,7 +64,7 @@ jobs:
 
         with:
           tagName: ${{ github.ref_name }}
-          releaseName: 'FormulaForge ${{ github.ref_name }}'
+          releaseName: '${{ github.ref_name }}'
           releaseBody: 'This is a pre-release version of FormulaForge. See the assets to download and install.'
           releaseDraft: false
           prerelease: true
