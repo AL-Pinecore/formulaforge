@@ -1948,10 +1948,12 @@ test('brace annotations stay selectable while editing the main argument', async 
   await textarea.blur()
   await page.waitForTimeout(150)
   await field.locator('text=▢').filter({ visible: true }).first().click({ force: true })
-  await page.waitForTimeout(150)
+  await expect(field).toHaveClass(/placeholder-selected/)
   await page.keyboard.type('z')
   await expect(textarea).toHaveValue('\\underbrace{xy}_{z}', { timeout: 10000 })
-  const annotationBox = await field.locator('text=z').filter({ visible: true }).first().boundingBox()
+  const annotation = field.locator('text=z').filter({ visible: true }).first()
+  await expect(annotation).toBeVisible()
+  const annotationBox = await annotation.boundingBox()
   expect(annotationBox).not.toBeNull()
   await page.mouse.click(
     annotationBox!.x + annotationBox!.width + 6,
