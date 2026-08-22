@@ -641,12 +641,16 @@ mod tests {
         std::fs::write(&path, b"old contents").unwrap();
         write_atomic(&path, b"new contents").unwrap();
         assert_eq!(std::fs::read(&path).unwrap(), b"new contents");
-        let pid_marker = format!(".tmp{}", std::process::id());
         let parent = path.parent().unwrap();
+        let marker = format!(
+            ".{}.tmp{}",
+            path.file_name().unwrap().to_string_lossy(),
+            std::process::id()
+        );
         let leftovers: Vec<_> = std::fs::read_dir(parent)
             .unwrap()
             .filter_map(Result::ok)
-            .filter(|entry| entry.file_name().to_string_lossy().contains(&pid_marker))
+            .filter(|entry| entry.file_name().to_string_lossy().starts_with(&marker))
             .collect();
         assert!(leftovers.is_empty(), "no temp files should remain");
         std::fs::remove_file(&path).unwrap();
